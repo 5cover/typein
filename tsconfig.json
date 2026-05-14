@@ -3,7 +3,7 @@
     "checkJs": false,
     "esModuleInterop": true,
     "lib": [
-      "es6"
+      "ESNext"
     ],
     "types": [
       "node"
@@ -19,7 +19,7 @@
     "strictFunctionTypes": true,
     "strictNullChecks": true,
     "strictPropertyInitialization": true,
-    "target": "ES2020"
+    "verbatimModuleSyntax": true
   },
   "include": [
     "**/*.ts",
