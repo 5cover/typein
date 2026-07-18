@@ -10,8 +10,12 @@ export type FamilyKind = 'primitive' | 'complement' | 'composition'
 export type FamilyId =
     | 'length.relation'
     | 'charAt.equality'
+    | 'charAt.defined'
+    | 'charAt.undefined'
     | 'charAt.relation'
     | 'at.equality'
+    | 'at.defined'
+    | 'at.undefined'
     | 'at.relation'
     | 'startsWith'
     | 'endsWith'
@@ -112,6 +116,10 @@ export function solve<const Domain extends string>(
             case 'charAt.equality':
             case 'at.equality':
                 return true
+            case 'charAt.defined':
+            case 'charAt.undefined':
+            case 'at.defined':
+            case 'at.undefined':
             case 'charAt.relation':
             case 'at.relation':
             case 'startsWith':
@@ -259,6 +267,29 @@ export function solve<const Domain extends string>(
     function* charAtCandidates(maxLength: number): Generator<Candidate> {
         for (let i = 0; i < maxLength; ++i) {
             const charsHere = groupBy(domain, s => s[i])
+            yield {
+                source: { family: 'charAt.defined', kind: 'primitive' },
+                mask: computeMask(domain, s => s[i] !== undefined),
+                expr: notExpr(
+                    notExpr({
+                        feature: {
+                            type: 'charAt',
+                            args: { n: i },
+                        },
+                    }),
+                ),
+            }
+            yield {
+                source: { family: 'charAt.undefined', kind: 'primitive' },
+                mask: computeMask(domain, s => s[i] === undefined),
+                expr: {
+                    feature: {
+                        type: 'charAt',
+                        args: { n: i },
+                        child: { type: 'not' },
+                    },
+                },
+            }
             for (const [char, subdomain] of charsHere) {
                 yield {
                     source: { family: 'charAt.equality', kind: 'primitive' },
@@ -304,6 +335,29 @@ export function solve<const Domain extends string>(
     function* atCandidates(maxLength: number): Generator<Candidate> {
         for (let n = 1; n <= maxLength; ++n) {
             const charsHere = groupBy(domain, s => s.at(-n))
+            yield {
+                source: { family: 'at.defined', kind: 'primitive' },
+                mask: computeMask(domain, s => s.at(-n) !== undefined),
+                expr: notExpr(
+                    notExpr({
+                        feature: {
+                            type: 'at',
+                            args: { '-n': n },
+                        },
+                    }),
+                ),
+            }
+            yield {
+                source: { family: 'at.undefined', kind: 'primitive' },
+                mask: computeMask(domain, s => s.at(-n) === undefined),
+                expr: {
+                    feature: {
+                        type: 'at',
+                        args: { '-n': n },
+                        child: { type: 'not' },
+                    },
+                },
+            }
             for (const [char, subdomain] of charsHere) {
                 yield {
                     source: { family: 'at.equality', kind: 'primitive' },
