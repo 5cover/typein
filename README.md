@@ -60,12 +60,16 @@ Useful options:
 
 - `--report`: write coverage and interest-score reporting to stderr.
 - `--test`: verify every generated expression against its promised mask for the input domain.
+- `-b, --builtin name`: add strings from a builtin domain. Can be repeated and can be combined with positional domain strings.
+- `--list-builtins`: list builtin domain names.
 - `--language ts`: select TypeScript output. This is the only output language for now.
 - `--cost source`: select the source-size comparator. This is the only cost comparator for now.
 - `--type-name Name`: change the generated union type name.
 - `--parameter-name name`: change the generated predicate parameter name.
 
 The current mask implementation uses numeric bit operations, so CLI domains must contain unique values and at most 30 strings.
+
+Builtin domains are intended both as examples and stress inputs. Some larger or stranger builtins can be slow with the current exhaustive composition closure.
 
 `--report` includes two coverage tables. In the family table:
 

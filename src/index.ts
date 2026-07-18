@@ -6,14 +6,20 @@ import { solve } from './solve.js'
 import { costComparators } from './cost.js'
 import { coverageReport, interestReport } from './report.js'
 import { verifyResult } from './eval.js'
+import { builtinDomainNames, builtinDomains, type BuiltinDomainName } from './domains.js'
 
-const typestrings = ['bigint', 'boolean', 'function', 'number', 'object', 'string', 'symbol', 'undefined'] as const
 const supportedLanguages = ['ts'] as const
 const supportedCosts = ['source'] as const
 
 const program = new Command()
     .name('typein')
     .argument('[DOMAIN...]', 'strings to analyze')
+    .addOption(
+        new Option('-b, --builtin <name>', 'add strings from a builtin domain')
+            .choices(builtinDomainNames)
+            .argParser((name, previous: BuiltinDomainName[] = []) => [...previous, name as BuiltinDomainName]),
+    )
+    .option('--list-builtins', 'list builtin domain names')
     .addOption(
         new Option('-l, --language <language>', 'output language')
             .choices(supportedLanguages)
@@ -27,7 +33,12 @@ const program = new Command()
     .parse()
 
 const opts = program.opts()
-const domain = program.args.length === 0 ? typestrings : program.args
+if (opts.listBuiltins) {
+    for (const name of builtinDomainNames) process.stdout.write(`${name}\n`)
+    process.exit(0)
+}
+
+const domain = resolveDomain(program.args, opts.builtin ?? [])
 validateDomain(domain)
 const result = solve(domain, costComparators[opts.cost])
 
@@ -59,11 +70,16 @@ switch (opts.language) {
         break
 }
 
-function validateDomain(domain: readonly string[]) {
-    if (new Set(domain).size !== domain.length) {
-        program.error('domain values must be unique')
-    }
+function resolveDomain(positional: readonly string[], builtins: readonly BuiltinDomainName[]): string[] {
+    const parts: string[] =
+        positional.length === 0 && builtins.length === 0
+            ? [...builtinDomains.typeof]
+            : [...builtins.flatMap(name => builtinDomains[name]), ...positional]
 
+    return [...new Set(parts)]
+}
+
+function validateDomain(domain: readonly string[]) {
     if (domain.length > 30) {
         program.error('domains larger than 30 values are not supported by the current numeric mask representation')
     }
