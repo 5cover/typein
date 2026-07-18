@@ -1,6 +1,7 @@
 import { invertLastPredicateInPlace, notExpr, type Expr } from './ir.js'
 import { computeMask } from './mask.js'
 import type { Mask } from './types.js'
+import { costCode, sourceLength } from './cost.js'
 
 type RelationalOp = '<' | '<=' | '>' | '>='
 type ComparisonOp = RelationalOp | '='
@@ -39,6 +40,7 @@ export type Winner = {
     expr: Expr
     source: CandidateSource
     generation: number
+    depth: number
 }
 
 export type FamilyStats = {
@@ -153,9 +155,20 @@ export function solve<const Domain extends string>(
             expr: candidate.expr,
             source: candidate.source,
             generation: generation++,
+            depth: candidateDepth(candidate),
         })
         stats.improvements++
         return true
+    }
+
+    function candidateDepth(candidate: Candidate): number {
+        switch (candidate.source.kind) {
+            case 'primitive':
+            case 'complement':
+                return 0
+            case 'composition':
+                return Math.max(...(candidate.source.parents ?? []).map(mask => winners.get(mask)?.depth ?? 0)) + 1
+        }
     }
 
     function isTargetMask(mask: Mask): boolean {
@@ -194,46 +207,62 @@ export function solve<const Domain extends string>(
     }
 
     function closeCompositions(): number {
-        let iterations = 0
-        let improved = true
+        const queue = [...winners.values()]
+        let readIndex = 0
+        let maxDepth = 0
 
-        while (improved) {
-            improved = false
-            iterations++
+        while (readIndex < queue.length) {
+            const left = queue[readIndex++]!
+            if (winners.get(left.mask)?.generation !== left.generation) continue
+
             const entries = [...winners.values()]
-
-            for (const left of entries) {
-                for (const right of entries) {
-                    const leftMask = left.mask
-                    const rightMask = right.mask
-                    const intersection = leftMask & rightMask
-                    improved =
-                        consider({
-                            expr: { type: 'and', left: left.expr, right: right.expr },
-                            mask: intersection,
-                            source: { family: 'and', kind: 'composition', parents: [leftMask, rightMask], iteration: iterations },
-                        }) || improved
-
-                    const union = leftMask | rightMask
-                    improved =
-                        consider({
-                            expr: { type: 'or', left: left.expr, right: right.expr },
-                            mask: union,
-                            source: { family: 'or', kind: 'composition', parents: [leftMask, rightMask], iteration: iterations },
-                        }) || improved
-
-                    const xor = leftMask ^ rightMask
-                    improved =
-                        consider({
-                            expr: { type: 'xor', left: left.expr, right: right.expr },
-                            mask: xor,
-                            source: { family: 'xor', kind: 'composition', parents: [leftMask, rightMask], iteration: iterations },
-                        }) || improved
-                }
+            for (const right of entries) {
+                if (left.generation < right.generation) continue
+                maxDepth = Math.max(maxDepth, tryCompose('and', left, right))
+                maxDepth = Math.max(maxDepth, tryCompose('or', left, right))
+                maxDepth = Math.max(maxDepth, tryCompose('xor', left, right))
             }
         }
 
-        return iterations - 1
+        return maxDepth
+
+        function tryCompose(family: 'and' | 'or' | 'xor', left: Winner, right: Winner): number {
+            const mask = composeMask(family, left.mask, right.mask)
+            if (!isTargetMask(mask) || shouldPruneSourceComposition(family, left, right, mask)) return 0
+
+            const improved = consider({
+                expr: { type: family, left: left.expr, right: right.expr },
+                mask,
+                source: { family, kind: 'composition', parents: [left.mask, right.mask], iteration: Math.max(left.depth, right.depth) + 1 },
+            })
+            if (!improved) return 0
+
+            const winner = winners.get(mask)!
+            queue.push(winner)
+            return winner.depth
+        }
+    }
+
+    function shouldPruneSourceComposition(family: 'and' | 'or' | 'xor', left: Winner, right: Winner, mask: Mask): boolean {
+        if (exprCostCompare !== costCode) return false
+
+        const current = winners.get(mask)
+        if (current === undefined) return false
+
+        const operatorLength = family === 'xor' ? ' !== '.length : ' && '.length
+        const lowerBound = sourceLength(left.expr) + operatorLength + sourceLength(right.expr)
+        return lowerBound > sourceLength(current.expr)
+    }
+
+    function composeMask(family: 'and' | 'or' | 'xor', leftMask: Mask, rightMask: Mask): Mask {
+        switch (family) {
+            case 'and':
+                return leftMask & rightMask
+            case 'or':
+                return leftMask | rightMask
+            case 'xor':
+                return leftMask ^ rightMask
+        }
     }
 
     function* candidates(): Generator<Candidate> {
