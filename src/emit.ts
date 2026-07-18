@@ -1,12 +1,17 @@
 import tsc from 'typescript'
-import { type Best } from './solve.js'
 import { maskToNames } from './mask.js'
 import type { Mask } from './types.js'
 import * as compile from './compile.js'
+import type { Expr } from './ir.js';
 
 const f = tsc.factory
 
-export function tsModule<S extends string>(S: readonly S[], best: Map<Mask, Best>, typeName: string): string {
+export function tsModule<S extends string>(
+    S: readonly S[],
+    best: Map<Mask, Expr>,
+    typeName: string,
+    parameterName = 's',
+): string {
     const statements: tsc.Statement[] = []
 
     statements.push(createExportedTypeAlias(typeName, S))
@@ -17,7 +22,16 @@ export function tsModule<S extends string>(S: readonly S[], best: Map<Mask, Best
             best,
             names: maskToNames(S, mask).sort(),
         }))
-        .sort((a, b) => subsetFunctionName(a.names).localeCompare(subsetFunctionName(b.names)))
+        .sort((a, b) => {
+            const sa = subsetFunctionName(a.names)
+            const sb = subsetFunctionName(b.names)
+            return (
+                sa.length - sb.length ||
+                (sa < sb ? -1
+                : sa > sb ? 1
+                : 0)
+            )
+        })
 
     for (const { best, names } of entries) {
         const fnName = subsetFunctionName(names)
@@ -25,10 +39,10 @@ export function tsModule<S extends string>(S: readonly S[], best: Map<Mask, Best
         statements.push(
             createExportedTypeGuard({
                 fnName,
-                parameterName: 's',
+                parameterName,
                 parameterTypeName: typeName,
                 narrowedValues: names,
-                body: compile.ts(best.expr, 's'),
+                body: compile.expr2ts(best, parameterName),
             }),
         )
     }
@@ -92,20 +106,18 @@ function unionOfStringLiterals(values: readonly string[]): tsc.TypeNode {
     return f.createUnionTypeNode(nodes)
 }
 
+export const printer = tsc.createPrinter({
+    newLine: tsc.NewLineKind.LineFeed,
+})
+
+export const sourceFile = tsc.createSourceFile('generated.ts', '', tsc.ScriptTarget.Latest, false, tsc.ScriptKind.TS)
 function printStatements(statements: readonly tsc.Statement[]): string {
-    const sourceFile = tsc.createSourceFile('generated.ts', '', tsc.ScriptTarget.Latest, false, tsc.ScriptKind.TS)
-
     const file = f.updateSourceFile(sourceFile, [...statements])
-
-    const printer = tsc.createPrinter({
-        newLine: tsc.NewLineKind.LineFeed,
-    })
-
     return printer.printFile(file)
 }
 
 function subsetFunctionName(values: readonly string[]): string {
-    return values.map(identifierPart).join('_')
+    return 'is_' + values.map(identifierPart).join('_')
 }
 
 function identifierPart(value: string): string {

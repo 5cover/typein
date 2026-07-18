@@ -5,5 +5,5 @@ export function computeMask<T>(array: readonly T[], fn: (t: T) => boolean): Mask
 }
 
 export function maskToNames<T>(array: readonly T[], mask: Mask): T[] {
-    return array.filter((_, i) => mask & (i << i))
+    return array.filter((_, i) => mask & (1 << i))
 }

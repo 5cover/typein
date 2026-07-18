@@ -1,39 +1,74 @@
 import tsc from 'typescript'
-import type { Expr, Op } from './ir.js'
+import type { Expr, Feature } from './ir.js'
 const f = tsc.factory
-export function ts(expr: Expr, variable = 's'): tsc.Expression {
-    const left = featureToExpression(expr, variable)
-    const right = literalToExpression(expr.value)
-    return f.createBinaryExpression(left, opToToken(expr.op), right)
+export function expr2ts(expr: Expr, variable = 'x'): tsc.Expression {
+    return featureToExpression(f.createIdentifier(variable), expr.feature)
 }
-function featureToExpression(expr: Expr, variable: string): tsc.Expression {
-    const s = f.createIdentifier(variable)
-    switch (expr.feature.t) {
+
+function featureToExpression(parent: tsc.Expression, feat: Feature): tsc.Expression {
+    parent = featureLevelToExpression(parent, feat)
+    return feat.child ? featureToExpression(parent, feat.child) : parent
+}
+
+function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Expression {
+    switch (feat.type) {
         case 'self':
-            return s
+            return parent
         case 'length':
-            return f.createPropertyAccessExpression(s, 'length')
+            return f.createPropertyAccessExpression(parent, 'length')
         case 'charAt':
-            return f.createElementAccessExpression(s, f.createNumericLiteral(expr.feature.index))
+            return f.createElementAccessExpression(parent, f.createNumericLiteral(feat.args.n))
+        case 'at':
+            return f.createElementAccessExpression(parent, f.createNumericLiteral(-feat.args['-n']))
         case 'charCodeAt':
-            return f.createCallExpression(f.createPropertyAccessExpression(s, 'charCodeAt'), undefined, [
-                f.createNumericLiteral(expr.feature.index),
+            return f.createCallExpression(f.createPropertyAccessExpression(parent, 'charCodeAt'), undefined, [
+                f.createNumericLiteral(feat.args.n),
             ])
         case 'startsWith':
-            return f.createCallExpression(f.createPropertyAccessExpression(s, 'startsWith'), undefined, [
-                f.createStringLiteral(expr.feature.value),
+            return f.createCallExpression(f.createPropertyAccessExpression(parent, 'startsWith'), undefined, [
+                f.createStringLiteral(feat.args.s),
             ])
         case 'endsWith':
-            return f.createCallExpression(f.createPropertyAccessExpression(s, 'endsWith'), undefined, [
-                f.createStringLiteral(expr.feature.value),
+            return f.createCallExpression(f.createPropertyAccessExpression(parent, 'endsWith'), undefined, [
+                f.createStringLiteral(feat.args.s),
             ])
         case 'includes':
-            return f.createCallExpression(f.createPropertyAccessExpression(s, 'includes'), undefined, [
-                f.createStringLiteral(expr.feature.value),
+            return f.createCallExpression(f.createPropertyAccessExpression(parent, 'includes'), undefined, [
+                f.createStringLiteral(feat.args.value),
             ])
+        case '<':
+            return f.createLessThan(parent, featureToExpression(parent, feat.args))
+        case '<=':
+            return f.createLessThanEquals(parent, featureToExpression(parent, feat.args))
+        case '<>':
+            return f.createStrictInequality(parent, featureToExpression(parent, feat.args))
+        case '=':
+            return f.createStrictEquality(parent, featureToExpression(parent, feat.args))
+        case '>':
+            return f.createGreaterThan(parent, featureToExpression(parent, feat.args))
+        case '>=':
+            return f.createGreaterThanEquals(parent, featureToExpression(parent, feat.args))
+        case 'and':
+            return f.createLogicalAnd(parent, featureToExpression(parent, feat.args))
+        case 'if':
+            return f.createConditionalExpression(
+                parent,
+                undefined,
+                featureToExpression(parent, feat.args.then),
+                undefined,
+                featureToExpression(parent, feat.args.else),
+            )
+        case 'not':
+            return f.createLogicalNot(parent)
+        case 'or':
+            return f.createLogicalOr(parent, featureToExpression(parent, feat.args))
+        case 'lit':
+            return literalToExpression(feat.args)
     }
+    //throw new Error(`unimplemented feature ${feat.type}: ${JSON.stringify(feat, null, 1)}`)
 }
-function literalToExpression(value: string | number | boolean): tsc.Expression {
+
+export function literalToExpression(value: string | number | boolean | undefined): tsc.Expression {
     switch (typeof value) {
         case 'string':
             return f.createStringLiteral(value)
@@ -41,21 +76,7 @@ function literalToExpression(value: string | number | boolean): tsc.Expression {
             return f.createNumericLiteral(value)
         case 'boolean':
             return value ? f.createTrue() : f.createFalse()
-    }
-}
-function opToToken(op: Op): tsc.BinaryOperatorToken {
-    switch (op) {
-        case '===':
-            return f.createToken(tsc.SyntaxKind.EqualsEqualsEqualsToken)
-        case '!==':
-            return f.createToken(tsc.SyntaxKind.ExclamationEqualsEqualsToken)
-        // case '<':
-        //     return f.createToken(tsc.SyntaxKind.LessThanToken)
-        // case '>':
-        //     return f.createToken(tsc.SyntaxKind.GreaterThanToken)
-        // case '<=':
-        //     return f.createToken(tsc.SyntaxKind.LessThanEqualsToken)
-        // case '>=':
-        //     return f.createToken(tsc.SyntaxKind.GreaterThanEqualsToken)
+        case 'undefined':
+            return f.createVoidZero()
     }
 }

@@ -6,7 +6,7 @@ Useful for code minimization and hotpath optimization.
 
 More generally, this tool accepts, conceptually:
 
-- S: a set of strings
+- S (Domain): a set of strings
 - L: a target language/expression IR system to derive characteristics from these strings (conceptually a set of valid programs)
 - c: a cost function to score an IR expression. Semantics are user-provided : maximizing performance, minimizing cyclomatic complexity...
 
