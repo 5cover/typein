@@ -20,6 +20,10 @@ function exprToExpression(expr: Exclude<Expr, { feature: Feature<'string'> }>, v
 }
 
 function featureToExpression(parent: tsc.Expression, feat: Feature): tsc.Expression {
+    if (feat.type === 'at' && feat.child !== undefined && isRelationalFeature(feat.child)) {
+        return featureToExpression(f.createNonNullExpression(atExpression(parent, feat.args['-n'])), feat.child)
+    }
+
     parent = featureLevelToExpression(parent, feat)
     return feat.child ? featureToExpression(parent, feat.child) : parent
 }
@@ -33,9 +37,7 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
         case 'charAt':
             return f.createElementAccessExpression(parent, f.createNumericLiteral(feat.args.n))
         case 'at':
-            return f.createCallExpression(f.createPropertyAccessExpression(parent, 'at'), undefined, [
-                f.createPrefixUnaryExpression(tsc.SyntaxKind.MinusToken, f.createNumericLiteral(feat.args['-n'])),
-            ])
+            return atExpression(parent, feat.args['-n'])
         case 'charCodeAt':
             return f.createCallExpression(f.createPropertyAccessExpression(parent, 'charCodeAt'), undefined, [
                 f.createNumericLiteral(feat.args.n),
@@ -82,6 +84,16 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
             return literalToExpression(feat.args)
     }
     //throw new Error(`unimplemented feature ${feat.type}: ${JSON.stringify(feat, null, 1)}`)
+}
+
+function atExpression(parent: tsc.Expression, negativeIndex: number): tsc.Expression {
+    return f.createCallExpression(f.createPropertyAccessExpression(parent, 'at'), undefined, [
+        f.createPrefixUnaryExpression(tsc.SyntaxKind.MinusToken, f.createNumericLiteral(negativeIndex)),
+    ])
+}
+
+function isRelationalFeature(feat: Feature): boolean {
+    return feat.type === '<' || feat.type === '<=' || feat.type === '>' || feat.type === '>='
 }
 
 export function literalToExpression(value: string | number | boolean | undefined): tsc.Expression {

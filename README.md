@@ -48,6 +48,25 @@ JS typeof operator produces a hardcoded string value representing the type. One 
 
 These string values will be refered to as "typestrings" from now on.
 
+## CLI
+
+```sh
+typein [DOMAIN...]
+```
+
+When `DOMAIN` is omitted, `typein` uses the JavaScript `typeof` strings. Generated TypeScript is written to stdout.
+
+Useful options:
+
+- `--report`: write coverage and interest-score reporting to stderr.
+- `--test`: verify every generated expression against its promised mask for the input domain.
+- `--language ts`: select TypeScript output. This is the only output language for now.
+- `--cost source`: select the source-size comparator. This is the only cost comparator for now.
+- `--type-name Name`: change the generated union type name.
+- `--parameter-name name`: change the generated predicate parameter name.
+
+The current mask implementation uses numeric bit operations, so CLI domains must contain unique values and at most 30 strings.
+
 For v0,
 *S* = typestrings
 *L* = all JavaScript expressions that reference *s* once and do compare against *S* elements directly for non-singleton *S'*. Otherwise, it gets trivial to solve (union/intersection)

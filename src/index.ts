@@ -28,6 +28,7 @@ const program = new Command()
 
 const opts = program.opts()
 const domain = program.args.length === 0 ? typestrings : program.args
+validateDomain(domain)
 const result = solve(domain, costComparators[opts.cost])
 
 if (opts.report) {
@@ -56,4 +57,14 @@ switch (opts.language) {
     case 'ts':
         process.stdout.write(emit.tsModule(domain, result.best, opts.typeName, opts.parameterName))
         break
+}
+
+function validateDomain(domain: readonly string[]) {
+    if (new Set(domain).size !== domain.length) {
+        program.error('domain values must be unique')
+    }
+
+    if (domain.length > 30) {
+        program.error('domains larger than 30 values are not supported by the current numeric mask representation')
+    }
 }
