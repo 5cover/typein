@@ -1,14 +1,40 @@
-import ts, { EmitHint } from 'typescript'
+#!/usr/bin/env node
+
+import { Command, Option } from '@commander-js/extra-typings'
+import { EmitHint } from 'typescript'
 import { expr2ts } from './compile.js'
 import * as emit from './emit.js'
 import type { Expr } from './ir.js'
 import { solve } from './solve.js'
 
 const typestrings = ['bigint', 'boolean', 'function', 'number', 'object', 'string', 'symbol', 'undefined'] as const
-const best = solve(typestrings, costCode)
-console.log(emit.tsModule(typestrings, best, 'Typestring'))
+const supportedLanguages = ['ts'] as const
+const supportedCosts = ['source'] as const
 
-/// Source length, then token count, then alphebetical fallback.
+const program = new Command()
+    .name('typein')
+    .argument('[DOMAIN...]', 'strings to analyze')
+    .addOption(
+        new Option('-l, --language <language>', 'output language')
+            .choices(supportedLanguages)
+            .default('ts' as const),
+    )
+    .addOption(new Option('--cost <name>', 'cost comparison function').choices(supportedCosts).default('source' as const))
+    .option('--type-name <name>', 'generated TypeScript union name', 'Typestring')
+    .option('--parameter-name <name>', 'generated predicate parameter name', 's')
+    .parse()
+
+const opts = program.opts()
+const domain = program.args.length === 0 ? typestrings : program.args
+const best = solve(domain, costCode)
+
+switch (opts.language) {
+    case 'ts':
+        process.stdout.write(emit.tsModule(domain, best, opts.typeName, opts.parameterName))
+        break
+}
+
+/// Source length, then token count, then alphabetical fallback.
 export function costCode(a: Expr, b: Expr): number {
     const aN = expr2ts(a),
         bN = expr2ts(b),

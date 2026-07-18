@@ -2,9 +2,13 @@
   "name": "typein",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "bin": {
+    "typein": "dist/index.js"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc -p tsconfig.build.json",
+    "test": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -12,6 +16,7 @@
   "packageManager": "pnpm@10.33.2",
   "type": "module",
   "devDependencies": {
+    "@commander-js/extra-typings": "^15.0.0",
     "@types/node": "^25.6.0",
     "typescript": "^6.0.3"
   }
