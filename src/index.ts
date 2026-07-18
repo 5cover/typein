@@ -4,9 +4,10 @@ import { Command, Option } from '@commander-js/extra-typings'
 import * as emit from './emit.js'
 import { solve } from './solve.js'
 import { costComparators } from './cost.js'
-import { coverageReport, interestReport } from './report.js'
+import { coverageReport, interestReport, profileReport } from './report.js'
 import { verifyResult } from './eval.js'
 import { builtinDomainNames, builtinDomains, type BuiltinDomainName } from './domains.js'
+import { performance } from 'node:perf_hooks'
 
 const supportedLanguages = ['ts'] as const
 const supportedCosts = ['source'] as const
@@ -27,6 +28,7 @@ const program = new Command()
     )
     .addOption(new Option('--cost <name>', 'cost comparison function').choices(supportedCosts).default('source' as const))
     .option('--report', 'write coverage and interest reports to stderr')
+    .option('--profile', 'write timing and search profile to stderr')
     .option('--test', 'verify generated expressions against their masks')
     .option('--type-name <name>', 'generated TypeScript union name', 'Domain')
     .option('--parameter-name <name>', 'generated predicate parameter name', 's')
@@ -41,14 +43,25 @@ if (opts.listBuiltins) {
 
 const domain = resolveDomain(program.args, opts.builtin ?? [])
 validateDomain(domain, opts.guardKey)
+const totalStart = performance.now()
+const solveStart = performance.now()
 const result = solve(domain, costComparators[opts.cost])
+const solveMs = performance.now() - solveStart
+
+let reportMs = 0
+let verifyMs = 0
+let emitMs = 0
 
 if (opts.report) {
+    const reportStart = performance.now()
     process.stderr.write(`${coverageReport(domain, result)}\n\n${interestReport(domain, result)}\n`)
+    reportMs = performance.now() - reportStart
 }
 
 if (opts.test) {
+    const verifyStart = performance.now()
     const failures = verifyResult(domain, result)
+    verifyMs = performance.now() - verifyStart
     if (failures.length > 0) {
         for (const failure of failures) {
             process.stderr.write(
@@ -66,9 +79,24 @@ if (opts.test) {
 }
 
 switch (opts.language) {
-    case 'ts':
+    case 'ts': {
+        const emitStart = performance.now()
         process.stdout.write(emit.tsModule(domain, result.best, opts.typeName, opts.parameterName, opts.guardKey))
+        emitMs = performance.now() - emitStart
         break
+    }
+}
+
+if (opts.profile) {
+    process.stderr.write(
+        `${profileReport(result, {
+            totalMs: performance.now() - totalStart,
+            solveMs,
+            reportMs,
+            verifyMs,
+            emitMs,
+        })}\n`,
+    )
 }
 
 function resolveDomain(positional: readonly string[], builtins: readonly BuiltinDomainName[]): string[] {

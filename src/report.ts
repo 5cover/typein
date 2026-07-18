@@ -3,6 +3,14 @@ import type { FamilyKind, SolveResult } from './solve.js'
 import type { Mask } from './types.js'
 import { costCodeValue, printExpression } from './cost.js'
 
+export type CliProfile = {
+    totalMs: number
+    solveMs: number
+    reportMs: number
+    verifyMs: number
+    emitMs: number
+}
+
 export function coverageReport(domain: readonly string[], result: SolveResult): string {
     const familyRows = [...result.familyStats.values()]
         .sort((a, b) => kindOrder(a.kind) - kindOrder(b.kind) || a.family.localeCompare(b.family))
@@ -67,6 +75,36 @@ export function interestReport(domain: readonly string[], result: SolveResult, l
     const worst = entries.slice(-limit)
 
     return ['## Notable Expressions', formatExpressionTable([...best, ...worst])].join('\n')
+}
+
+export function profileReport(result: SolveResult, cli: CliProfile): string {
+    const solve = result.profile
+    return [
+        '## Profile',
+        markdownTable(
+            ['phase', 'ms'],
+            [
+                ['solve primitives+complements', formatNumber(solve.primitiveMs)],
+                ['solve composition', formatNumber(solve.compositionMs)],
+                ['solve finalization', formatNumber(solve.finalizeMs)],
+                ['solve total', formatNumber(cli.solveMs)],
+                ['report', formatNumber(cli.reportMs)],
+                ['verify', formatNumber(cli.verifyMs)],
+                ['emit', formatNumber(cli.emitMs)],
+                ['total', formatNumber(cli.totalMs)],
+            ],
+        ),
+        '## Composition Counters',
+        markdownTable(
+            ['counter', 'count'],
+            [
+                ['attempts', solve.compositionAttempts.toString()],
+                ['pruned/rejected before consider', solve.compositionPruned.toString()],
+                ['considered', solve.compositionConsidered.toString()],
+                ['improvements', solve.compositionImprovements.toString()],
+            ],
+        ),
+    ].join('\n')
 }
 
 function entropyBits(subsetSize: number, universeSize: number): number {

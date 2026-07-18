@@ -74,6 +74,7 @@ type Registry = { [S in Domain]?: Registry, [K in GuardKey]?: Guard }
 Useful options:
 
 - `--report`: write coverage and interest-score reporting to stderr.
+- `--profile`: write timing and composition-search counters to stderr.
 - `--test`: verify every generated expression against its promised mask for the input domain.
 - `-b, --builtin name`: add strings from a builtin domain. Can be repeated and can be combined with positional domain strings.
 - `--list-builtins`: list builtin domain names.

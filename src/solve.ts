@@ -2,6 +2,7 @@ import { invertLastPredicateInPlace, notExpr, type Expr } from './ir.js'
 import { computeMask } from './mask.js'
 import type { Mask } from './types.js'
 import { costCode, sourceLength } from './cost.js'
+import { performance } from 'node:perf_hooks'
 
 type RelationalOp = '<' | '<=' | '>' | '>='
 type ComparisonOp = RelationalOp | '='
@@ -63,8 +64,19 @@ export type SolveResult = {
         composition: Set<Mask>
     }
     compositionPasses: number
+    profile: SolveProfile
     targetMaskCount: number
     fullMask: Mask
+}
+
+export type SolveProfile = {
+    primitiveMs: number
+    compositionMs: number
+    finalizeMs: number
+    compositionAttempts: number
+    compositionPruned: number
+    compositionConsidered: number
+    compositionImprovements: number
 }
 
 export function solve<const Domain extends string>(
@@ -75,8 +87,18 @@ export function solve<const Domain extends string>(
     const familyStats = new Map<FamilyId, FamilyStats>()
     const discoveredMasks = new Set<Mask>()
     const fullMask = (1 << domain.length) - 1
+    const profile: SolveProfile = {
+        primitiveMs: 0,
+        compositionMs: 0,
+        finalizeMs: 0,
+        compositionAttempts: 0,
+        compositionPruned: 0,
+        compositionConsidered: 0,
+        compositionImprovements: 0,
+    }
     let generation = 0
 
+    const primitiveStart = performance.now()
     for (const candidate of candidates()) {
         consider(candidate)
 
@@ -88,12 +110,17 @@ export function solve<const Domain extends string>(
             })
         }
     }
+    profile.primitiveMs = performance.now() - primitiveStart
 
     const complements = new Set(winners.keys())
+    const compositionStart = performance.now()
     const compositionPasses = closeCompositions()
+    profile.compositionMs = performance.now() - compositionStart
+
+    const finalizeStart = performance.now()
     recordFinalWinners()
 
-    return {
+    const result = {
         best: new Map([...winners].map(([mask, winner]) => [mask, winner.expr])),
         winners,
         familyStats,
@@ -103,9 +130,13 @@ export function solve<const Domain extends string>(
             composition: new Set(winners.keys()),
         },
         compositionPasses,
+        profile,
         targetMaskCount: fullMask - 1,
         fullMask,
     }
+    profile.finalizeMs = performance.now() - finalizeStart
+
+    return result
 
     function complementExpr(candidate: Candidate): Expr {
         const expr = structuredClone(candidate.expr)
@@ -227,9 +258,14 @@ export function solve<const Domain extends string>(
         return maxDepth
 
         function tryCompose(family: 'and' | 'or' | 'xor', left: Winner, right: Winner): number {
+            profile.compositionAttempts++
             const mask = composeMask(family, left.mask, right.mask)
-            if (!isTargetMask(mask) || shouldPruneSourceComposition(family, left, right, mask)) return 0
+            if (!isTargetMask(mask) || shouldPruneSourceComposition(family, left, right, mask)) {
+                profile.compositionPruned++
+                return 0
+            }
 
+            profile.compositionConsidered++
             const improved = consider({
                 expr: { type: family, left: left.expr, right: right.expr },
                 mask,
@@ -237,6 +273,7 @@ export function solve<const Domain extends string>(
             })
             if (!improved) return 0
 
+            profile.compositionImprovements++
             const winner = winners.get(mask)!
             queue.push(winner)
             return winner.depth
