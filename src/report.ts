@@ -1,5 +1,5 @@
 import { maskToNames } from './mask.js'
-import type { SolveResult } from './solve.js'
+import type { FamilyKind, SolveResult } from './solve.js'
 import type { Mask } from './types.js'
 import { costCodeValue, printExpression } from './cost.js'
 
@@ -14,21 +14,33 @@ export function interestScore(cost: number, subsetSize: number, universeSize: nu
 }
 
 export function coverageReport(domain: readonly string[], result: SolveResult): string {
-    const familyRows = [...result.primitiveFamilyMasks.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([family, masks]) => [family, `${masks.size} masks`] as const)
+    const familyRows = [...result.familyStats.values()]
+        .sort((a, b) => kindOrder(a.kind) - kindOrder(b.kind) || a.family.localeCompare(b.family))
+        .map(stats => [
+            stats.family,
+            stats.kind,
+            stats.candidates.toString(),
+            stats.masks.size.toString(),
+            stats.firstMasks.size.toString(),
+            stats.improvements.toString(),
+            stats.winners.size.toString(),
+        ])
 
-    const rows: readonly (readonly [string, string])[] = [
-        ...familyRows,
-        ['combined unique', `${result.primitiveMasks.size} masks`],
-        ['with complements', `${result.withComplements.size} masks`],
-        ['after composition', `${result.best.size} masks`],
-        ['composition passes', `${result.compositionIterations}`],
-        ['total target', `${result.targetMaskCount} masks`],
-        ['coverage', `${formatPercent(result.best.size / result.targetMaskCount)}`],
+    const stageRows = [
+        ['primitive unique', result.stageMasks.primitives.size.toString(), formatPercent(result.stageMasks.primitives.size / result.targetMaskCount)],
+        ['with complements', result.stageMasks.complements.size.toString(), formatPercent(result.stageMasks.complements.size / result.targetMaskCount)],
+        ['after composition', result.stageMasks.composition.size.toString(), formatPercent(result.stageMasks.composition.size / result.targetMaskCount)],
+        ['target', result.targetMaskCount.toString(), formatPercent(1)],
     ]
 
-    return formatRows(rows)
+    return [
+        'family coverage:',
+        formatTable(['family', 'kind', 'candidates', 'masks', 'new', 'improvements', 'winners'], familyRows, new Set([2, 3, 4, 5, 6])),
+        '',
+        'stage coverage:',
+        formatTable(['stage', 'masks', 'coverage'], stageRows, new Set([1, 2])),
+        `composition passes: ${result.compositionPasses}`,
+    ].join('\n')
 }
 
 export function interestReport(domain: readonly string[], result: SolveResult, limit = 10): string {
@@ -56,14 +68,38 @@ export function interestReport(domain: readonly string[], result: SolveResult, l
     ].join('\n')
 }
 
-function formatRows(rows: readonly (readonly [string, string])[]): string {
-    const labelWidth = Math.max(...rows.map(([label]) => label.length))
-    const valueWidth = Math.max(...rows.map(([, value]) => value.length))
-    return rows.map(([label, value]) => `${`${label}:`.padEnd(labelWidth + 1)} ${value.padStart(valueWidth)}`).join('\n')
-}
-
 function formatPercent(value: number): string {
     return `${(value * 100).toFixed(1)}%`
+}
+
+function formatTable(headers: readonly string[], rows: readonly (readonly string[])[], rightAligned: ReadonlySet<number>): string {
+    const widths = headers.map((header, index) =>
+        Math.max(header.length, ...rows.map(row => row[index]?.length ?? 0)),
+    )
+    const allRows = [headers, ...rows]
+
+    return allRows
+        .map((row, rowIndex) =>
+            row
+                .map((cell, column) => {
+                    const pad = rightAligned.has(column) ? cell.padStart : cell.padEnd
+                    return pad.call(cell, widths[column]!)
+                })
+                .join('  '),
+        )
+        .flatMap((line, index) => (index === 0 ? [line, widths.map(width => '-'.repeat(width)).join('  ')] : [line]))
+        .join('\n')
+}
+
+function kindOrder(kind: FamilyKind): number {
+    switch (kind) {
+        case 'primitive':
+            return 0
+        case 'complement':
+            return 1
+        case 'composition':
+            return 2
+    }
 }
 
 function popcount(mask: Mask): number {

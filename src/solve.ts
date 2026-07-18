@@ -1,17 +1,62 @@
-import { negateInPlace, type Expr } from './ir.js'
+import { notExpr, type Expr } from './ir.js'
 import { computeMask } from './mask.js'
 import type { Mask } from './types.js'
 
-type Candidate = { expr: Expr; mask: Mask; family: string }
 type RelationalOp = '<' | '<=' | '>' | '>='
 type ComparisonOp = RelationalOp | '='
 
+export type FamilyKind = 'primitive' | 'complement' | 'composition'
+
+export type FamilyId =
+    | 'length.relation'
+    | 'charAt.equality'
+    | 'charAt.relation'
+    | 'at.equality'
+    | 'at.relation'
+    | 'startsWith'
+    | 'endsWith'
+    | 'includes'
+    | 'not'
+    | 'and'
+    | 'or'
+    | 'xor'
+
+export type CandidateSource = {
+    family: FamilyId
+    kind: FamilyKind
+    parents?: readonly Mask[]
+    iteration?: number
+}
+
+type Candidate = { expr: Expr; mask: Mask; source: CandidateSource }
+
+export type Winner = {
+    mask: Mask
+    expr: Expr
+    source: CandidateSource
+    generation: number
+}
+
+export type FamilyStats = {
+    family: FamilyId
+    kind: FamilyKind
+    candidates: number
+    masks: Set<Mask>
+    firstMasks: Set<Mask>
+    improvements: number
+    winners: Set<Mask>
+}
+
 export type SolveResult = {
     best: Map<Mask, Expr>
-    primitiveFamilyMasks: Map<string, Set<Mask>>
-    primitiveMasks: Set<Mask>
-    withComplements: Set<Mask>
-    compositionIterations: number
+    winners: Map<Mask, Winner>
+    familyStats: Map<FamilyId, FamilyStats>
+    stageMasks: {
+        primitives: Set<Mask>
+        complements: Set<Mask>
+        composition: Set<Mask>
+    }
+    compositionPasses: number
     targetMaskCount: number
     fullMask: Mask
 }
@@ -20,48 +65,100 @@ export function solve<const Domain extends string>(
     domain: readonly Domain[],
     exprCostCompare: (a: Expr, b: Expr) => number,
 ): SolveResult {
-    const best = new Map<Mask, Expr>()
+    const winners = new Map<Mask, Winner>()
+    const familyStats = new Map<FamilyId, FamilyStats>()
+    const discoveredMasks = new Set<Mask>()
     const fullMask = (1 << domain.length) - 1
-    const primitiveFamilyMasks = new Map<string, Set<Mask>>()
-    const primitiveMasks = new Set<Mask>()
-    const withComplements = new Set<Mask>()
+    let generation = 0
 
-    for (const { expr, mask, family } of candidates()) {
-        if (mask === 0 || mask === fullMask) continue
-        primitiveMasks.add(mask)
-        addFamilyMask(family, mask)
-        save(expr, mask)
-        withComplements.add(mask)
+    for (const candidate of candidates()) {
+        consider(candidate)
 
-        const complement = fullMask ^ mask
-        save(negateInPlace(structuredClone(expr)), complement)
-        withComplements.add(complement)
+        if (isTargetMask(candidate.mask)) {
+            consider({
+                expr: notExpr(structuredClone(candidate.expr)),
+                mask: fullMask ^ candidate.mask,
+                source: { family: 'not', kind: 'complement', parents: [candidate.mask] },
+            })
+        }
     }
 
-    const compositionIterations = closeCompositions()
+    const complements = new Set(winners.keys())
+    const compositionPasses = closeCompositions()
+    recordFinalWinners()
 
     return {
-        best,
-        primitiveFamilyMasks,
-        primitiveMasks,
-        withComplements,
-        compositionIterations,
+        best: new Map([...winners].map(([mask, winner]) => [mask, winner.expr])),
+        winners,
+        familyStats,
+        stageMasks: {
+            primitives: masksForKind('primitive'),
+            complements,
+            composition: new Set(winners.keys()),
+        },
+        compositionPasses,
         targetMaskCount: fullMask - 1,
         fullMask,
     }
 
-    function save(expr: Expr, mask: Mask): boolean {
-        if (mask === 0 || mask === fullMask) return false
-        const current = best.get(mask)
-        if (current !== undefined && exprCostCompare(expr, current) >= 0) return false
-        best.set(mask, expr)
+    function consider(candidate: Candidate): boolean {
+        const stats = statsFor(candidate.source)
+        stats.candidates++
+
+        if (!isTargetMask(candidate.mask)) return false
+
+        stats.masks.add(candidate.mask)
+        if (!discoveredMasks.has(candidate.mask)) {
+            discoveredMasks.add(candidate.mask)
+            stats.firstMasks.add(candidate.mask)
+        }
+
+        const current = winners.get(candidate.mask)
+        if (current !== undefined && exprCostCompare(candidate.expr, current.expr) >= 0) return false
+
+        winners.set(candidate.mask, {
+            mask: candidate.mask,
+            expr: candidate.expr,
+            source: candidate.source,
+            generation: generation++,
+        })
+        stats.improvements++
         return true
     }
 
-    function addFamilyMask(family: string, mask: Mask) {
-        const masks = primitiveFamilyMasks.get(family)
-        if (masks) masks.add(mask)
-        else primitiveFamilyMasks.set(family, new Set([mask]))
+    function isTargetMask(mask: Mask): boolean {
+        return mask !== 0 && mask !== fullMask
+    }
+
+    function statsFor(source: CandidateSource): FamilyStats {
+        const current = familyStats.get(source.family)
+        if (current !== undefined) return current
+
+        const stats: FamilyStats = {
+            family: source.family,
+            kind: source.kind,
+            candidates: 0,
+            masks: new Set(),
+            firstMasks: new Set(),
+            improvements: 0,
+            winners: new Set(),
+        }
+        familyStats.set(source.family, stats)
+        return stats
+    }
+
+    function masksForKind(kind: FamilyKind): Set<Mask> {
+        const masks = new Set<Mask>()
+        for (const stats of familyStats.values()) {
+            if (stats.kind !== kind) continue
+            for (const mask of stats.masks) masks.add(mask)
+        }
+        return masks
+    }
+
+    function recordFinalWinners() {
+        for (const stats of familyStats.values()) stats.winners.clear()
+        for (const [mask, winner] of winners) statsFor(winner.source).winners.add(mask)
     }
 
     function closeCompositions(): number {
@@ -71,18 +168,35 @@ export function solve<const Domain extends string>(
         while (improved) {
             improved = false
             iterations++
-            const entries = [...best.entries()]
+            const entries = [...winners.values()]
 
-            for (const [leftMask, left] of entries) {
-                for (const [rightMask, right] of entries) {
+            for (const left of entries) {
+                for (const right of entries) {
+                    const leftMask = left.mask
+                    const rightMask = right.mask
                     const intersection = leftMask & rightMask
-                    improved = save({ type: 'and', left, right }, intersection) || improved
+                    improved =
+                        consider({
+                            expr: { type: 'and', left: left.expr, right: right.expr },
+                            mask: intersection,
+                            source: { family: 'and', kind: 'composition', parents: [leftMask, rightMask], iteration: iterations },
+                        }) || improved
 
                     const union = leftMask | rightMask
-                    improved = save({ type: 'or', left, right }, union) || improved
+                    improved =
+                        consider({
+                            expr: { type: 'or', left: left.expr, right: right.expr },
+                            mask: union,
+                            source: { family: 'or', kind: 'composition', parents: [leftMask, rightMask], iteration: iterations },
+                        }) || improved
 
                     const xor = leftMask ^ rightMask
-                    improved = save({ type: 'xor', left, right }, xor) || improved
+                    improved =
+                        consider({
+                            expr: { type: 'xor', left: left.expr, right: right.expr },
+                            mask: xor,
+                            source: { family: 'xor', kind: 'composition', parents: [leftMask, rightMask], iteration: iterations },
+                        }) || improved
                 }
             }
         }
@@ -102,7 +216,7 @@ export function solve<const Domain extends string>(
         for (const length of lengths) {
             for (const op of ['<', '<=', '>', '>=', '='] as const) {
                 yield {
-                    family: 'length relations',
+                    source: { family: 'length.relation', kind: 'primitive' },
                     mask: computeMask(domain, s => compare(s.length, op, length)),
                     expr: {
                         feature: {
@@ -123,7 +237,7 @@ export function solve<const Domain extends string>(
             const charsHere = groupBy(domain, s => s[i])
             for (const [char, subdomain] of charsHere) {
                 yield {
-                    family: 'char equality',
+                    source: { family: 'charAt.equality', kind: 'primitive' },
                     mask: computeMask(domain, s => subdomain.includes(s)),
                     expr: {
                         feature: {
@@ -145,7 +259,7 @@ export function solve<const Domain extends string>(
             for (const char of sortedChars) {
                 for (const op of ['<', '<=', '>', '>='] as const) {
                     yield {
-                        family: 'char relations',
+                        source: { family: 'charAt.relation', kind: 'primitive' },
                         mask: computeMask(domain, s => compare(s[i], op, char)),
                         expr: {
                             feature: {
@@ -168,7 +282,7 @@ export function solve<const Domain extends string>(
             const charsHere = groupBy(domain, s => s.at(-n))
             for (const [char, subdomain] of charsHere) {
                 yield {
-                    family: 'negative index equality',
+                    source: { family: 'at.equality', kind: 'primitive' },
                     mask: computeMask(domain, s => subdomain.includes(s)),
                     expr: {
                         feature: {
@@ -190,7 +304,7 @@ export function solve<const Domain extends string>(
             for (const char of sortedChars) {
                 for (const op of ['<', '<=', '>', '>='] as const) {
                     yield {
-                        family: 'negative index relations',
+                        source: { family: 'at.relation', kind: 'primitive' },
                         mask: computeMask(domain, s => compare(s.at(-n), op, char)),
                         expr: {
                             feature: {
@@ -227,7 +341,7 @@ export function solve<const Domain extends string>(
 
         for (const prefix of prefixes) {
             yield {
-                family: 'prefixes',
+                source: { family: 'startsWith', kind: 'primitive' },
                 mask: computeMask(domain, s => s.startsWith(prefix)),
                 expr: { feature: { type: 'startsWith', args: { s: prefix } } },
             }
@@ -235,7 +349,7 @@ export function solve<const Domain extends string>(
 
         for (const suffix of suffixes) {
             yield {
-                family: 'suffixes',
+                source: { family: 'endsWith', kind: 'primitive' },
                 mask: computeMask(domain, s => s.endsWith(suffix)),
                 expr: { feature: { type: 'endsWith', args: { s: suffix } } },
             }
@@ -243,7 +357,7 @@ export function solve<const Domain extends string>(
 
         for (const value of substrings) {
             yield {
-                family: 'substring membership',
+                source: { family: 'includes', kind: 'primitive' },
                 mask: computeMask(domain, s => s.includes(value)),
                 expr: { feature: { type: 'includes', args: { value } } },
             }

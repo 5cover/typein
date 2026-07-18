@@ -67,6 +67,14 @@ Useful options:
 
 The current mask implementation uses numeric bit operations, so CLI domains must contain unique values and at most 30 strings.
 
+`--report` includes two coverage tables. In the family table:
+
+- `candidates`: candidate expressions considered for that family, including candidates for empty/full masks.
+- `masks`: distinct non-empty, non-full masks produced by that family.
+- `new`: masks first discovered by that family in search order.
+- `improvements`: times a candidate from that family replaced the current best expression for a mask.
+- `winners`: final output masks whose direct winning expression came from that family.
+
 For v0,
 *S* = typestrings
 *L* = all JavaScript expressions that reference *s* once and do compare against *S* elements directly for non-singleton *S'*. Otherwise, it gets trivial to solve (union/intersection)

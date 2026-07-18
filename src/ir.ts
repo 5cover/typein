@@ -57,7 +57,7 @@ export type Expr =
     | { type: 'not'; expr: Expr }
     | { type: 'and' | 'or' | 'xor'; left: Expr; right: Expr }
 
-export function negateInPlace(expr: Expr): Expr {
+export function notExpr(expr: Expr): Expr {
     return { type: 'not', expr }
 }
 
