@@ -54,6 +54,9 @@ export function solve<const Domain extends string>(
         const m = metrics()
         yield* lengthCandidates(m.lengths)
         yield* charAtCandidates(m.maxLength)
+        yield* atCandidates(m.maxLength)
+        yield* charCodeAtCandidates(m.maxLength)
+        yield* stringMembershipCandidates()
     }
 
     function* lengthCandidates(lengths: readonly number[]): Generator<Candidate> {
@@ -117,6 +120,139 @@ export function solve<const Domain extends string>(
                         },
                     }
                 }
+            }
+        }
+    }
+
+    function* atCandidates(maxLength: number): Generator<Candidate> {
+        for (let n = 1; n <= maxLength; ++n) {
+            const charsHere = groupBy(domain, s => s.at(-n))
+            for (const [char, subdomain] of charsHere) {
+                yield {
+                    family: 'negative index equality',
+                    mask: computeMask(domain, s => subdomain.includes(s)),
+                    expr: {
+                        feature: {
+                            type: 'at',
+                            args: { '-n': n },
+                            child: {
+                                type: '=',
+                                args: { type: 'lit', args: char },
+                            },
+                        },
+                    },
+                }
+            }
+
+            const sortedChars = [...charsHere.keys()]
+                .filter((char): char is string => char !== undefined)
+                .sort()
+
+            for (const char of sortedChars) {
+                for (const op of ['<', '<=', '>', '>='] as const) {
+                    yield {
+                        family: 'negative index relations',
+                        mask: computeMask(domain, s => compare(s.at(-n), op, char)),
+                        expr: {
+                            feature: {
+                                type: 'at',
+                                args: { '-n': n },
+                                child: {
+                                    type: op,
+                                    args: { type: 'lit', args: char },
+                                },
+                            },
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+    function* charCodeAtCandidates(maxLength: number): Generator<Candidate> {
+        for (let i = 0; i < maxLength; ++i) {
+            const codesHere = groupBy(domain, s => s.charCodeAt(i))
+            const sortedCodes = [...codesHere.keys()]
+                .filter(code => !Number.isNaN(code))
+                .sort((a, b) => a - b)
+
+            for (const [code, subdomain] of codesHere) {
+                if (Number.isNaN(code)) continue
+                yield {
+                    family: 'char code equality',
+                    mask: computeMask(domain, s => subdomain.includes(s)),
+                    expr: {
+                        feature: {
+                            type: 'charCodeAt',
+                            args: { n: i },
+                            child: {
+                                type: '=',
+                                args: { type: 'lit', args: code },
+                            },
+                        },
+                    },
+                }
+            }
+
+            for (const code of sortedCodes) {
+                for (const op of ['<', '<=', '>', '>='] as const) {
+                    yield {
+                        family: 'char code relations',
+                        mask: computeMask(domain, s => compare(s.charCodeAt(i), op, code)),
+                        expr: {
+                            feature: {
+                                type: 'charCodeAt',
+                                args: { n: i },
+                                child: {
+                                    type: op,
+                                    args: { type: 'lit', args: code },
+                                },
+                            },
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+    function* stringMembershipCandidates(): Generator<Candidate> {
+        const prefixes = new Set<string>()
+        const suffixes = new Set<string>()
+        const substrings = new Set<string>()
+
+        for (const s of domain) {
+            for (let length = 1; length < s.length; ++length) {
+                prefixes.add(s.slice(0, length))
+                suffixes.add(s.slice(s.length - length))
+            }
+            for (let start = 0; start < s.length; ++start) {
+                for (let end = start + 1; end < s.length; ++end) {
+                    substrings.add(s.slice(start, end))
+                }
+            }
+        }
+
+        for (const prefix of prefixes) {
+            yield {
+                family: 'prefixes',
+                mask: computeMask(domain, s => s.startsWith(prefix)),
+                expr: { feature: { type: 'startsWith', args: { s: prefix } } },
+            }
+        }
+
+        for (const suffix of suffixes) {
+            yield {
+                family: 'suffixes',
+                mask: computeMask(domain, s => s.endsWith(suffix)),
+                expr: { feature: { type: 'endsWith', args: { s: suffix } } },
+            }
+        }
+
+        for (const value of substrings) {
+            yield {
+                family: 'substring membership',
+                mask: computeMask(domain, s => s.includes(value)),
+                expr: { feature: { type: 'includes', args: { value } } },
             }
         }
     }

@@ -19,7 +19,9 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
         case 'charAt':
             return f.createElementAccessExpression(parent, f.createNumericLiteral(feat.args.n))
         case 'at':
-            return f.createElementAccessExpression(parent, f.createNumericLiteral(-feat.args['-n']))
+            return f.createCallExpression(f.createPropertyAccessExpression(parent, 'at'), undefined, [
+                f.createNumericLiteral(-feat.args['-n']),
+            ])
         case 'charCodeAt':
             return f.createCallExpression(f.createPropertyAccessExpression(parent, 'charCodeAt'), undefined, [
                 f.createNumericLiteral(feat.args.n),
