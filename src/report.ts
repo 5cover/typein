@@ -4,11 +4,7 @@ import type { Mask } from './types.js'
 import { costCodeValue, printExpression } from './cost.js'
 
 export function interestScore(cost: number, subsetSize: number, universeSize: number): number {
-    const p = subsetSize / universeSize
-    const entropy =
-        p === 0 || p === 1
-            ? 0
-            : -p * Math.log2(p) - (1 - p) * Math.log2(1 - p)
+    const entropy = entropyBits(subsetSize, universeSize)
 
     return entropy === 0 ? Number.POSITIVE_INFINITY : cost / entropy
 }
@@ -34,61 +30,94 @@ export function coverageReport(domain: readonly string[], result: SolveResult): 
     ]
 
     return [
-        'family coverage:',
-        formatTable(['family', 'kind', 'candidates', 'masks', 'new', 'improvements', 'winners'], familyRows, new Set([2, 3, 4, 5, 6])),
+        '## Family Coverage',
+        formatMarkdownTable(['family', 'kind', 'candidates', 'masks', 'new', 'improvements', 'winners'], familyRows),
         '',
-        'stage coverage:',
-        formatTable(['stage', 'masks', 'coverage'], stageRows, new Set([1, 2])),
+        '## Stage Coverage',
+        formatMarkdownTable(['stage', 'masks', 'coverage'], stageRows),
+        '',
         `composition passes: ${result.compositionPasses}`,
     ].join('\n')
 }
 
 export function interestReport(domain: readonly string[], result: SolveResult, limit = 10): string {
-    const ranked = [...result.best.entries()]
+    const entries = [...result.best.entries()]
         .map(([mask, expr]) => {
             const names = maskToNames(domain, mask)
+            const cost = costCodeValue(expr)
+            const entropy = entropyBits(names.length, domain.length)
             return {
                 mask,
                 names,
-                score: interestScore(costCodeValue(expr), names.length, domain.length),
+                entropy,
+                score: interestScore(cost, names.length, domain.length),
                 code: printExpression(expr, 's'),
             }
         })
-        .sort((a, b) => a.score - b.score || popcount(b.mask) - popcount(a.mask) || a.code.localeCompare(b.code))
+
+    const notable = entries
+        .toSorted((a, b) => a.score - b.score || popcount(b.mask) - popcount(a.mask) || a.code.localeCompare(b.code))
         .slice(0, limit)
 
-    if (ranked.length === 0) return 'interesting expressions: none'
+    const leastEntropy = entries
+        .toSorted((a, b) => a.entropy - b.entropy || a.score - b.score || a.code.localeCompare(b.code))
+        .slice(0, limit)
+
+    if (entries.length === 0) return '## Interesting Expressions\n\nnone'
 
     return [
-        'interesting expressions:',
-        ...ranked.map(item => {
-            const score = Number.isFinite(item.score) ? item.score.toFixed(2) : 'Infinity'
-            return `  ${score.padStart(8)}  ${item.names.join(', ')}  ${item.code}`
-        }),
+        '## Interesting Expressions',
+        formatExpressionTable(notable),
+        '',
+        '## Least Entropy Expressions',
+        formatExpressionTable(leastEntropy),
     ].join('\n')
+}
+
+function entropyBits(subsetSize: number, universeSize: number): number {
+    const p = subsetSize / universeSize
+    return p === 0 || p === 1 ? 0 : -p * Math.log2(p) - (1 - p) * Math.log2(1 - p)
 }
 
 function formatPercent(value: number): string {
     return `${(value * 100).toFixed(1)}%`
 }
 
-function formatTable(headers: readonly string[], rows: readonly (readonly string[])[], rightAligned: ReadonlySet<number>): string {
-    const widths = headers.map((header, index) =>
-        Math.max(header.length, ...rows.map(row => row[index]?.length ?? 0)),
+function formatExpressionTable(
+    rows: readonly {
+        entropy: number
+        names: readonly string[]
+        code: string
+    }[],
+): string {
+    return formatMarkdownTable(
+        ['entropy', 'partition', 'expression'],
+        rows.map(row => [formatNumber(row.entropy), row.names.join(', '), code(row.code)]),
     )
-    const allRows = [headers, ...rows]
+}
 
-    return allRows
-        .map((row, rowIndex) =>
-            row
-                .map((cell, column) => {
-                    const pad = rightAligned.has(column) ? cell.padStart : cell.padEnd
-                    return pad.call(cell, widths[column]!)
-                })
-                .join('  '),
-        )
-        .flatMap((line, index) => (index === 0 ? [line, widths.map(width => '-'.repeat(width)).join('  ')] : [line]))
-        .join('\n')
+function formatMarkdownTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
+    return [
+        markdownRow(headers),
+        markdownRow(headers.map(() => '---')),
+        ...rows.map(markdownRow),
+    ].join('\n')
+}
+
+function markdownRow(cells: readonly string[]): string {
+    return `| ${cells.map(escapeMarkdownCell).join(' | ')} |`
+}
+
+function escapeMarkdownCell(cell: string): string {
+    return cell.replaceAll('|', '\\|').replaceAll('\n', '<br>')
+}
+
+function code(value: string): string {
+    return `\`${value.replaceAll('`', '\\`')}\``
+}
+
+function formatNumber(value: number): string {
+    return Number.isFinite(value) ? value.toFixed(3) : 'Infinity'
 }
 
 function kindOrder(kind: FamilyKind): number {
