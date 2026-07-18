@@ -48,11 +48,18 @@ type F<T extends string, C extends InTypeTag, A extends object | void = void> = 
     child?: Feature<C>
 } & (A extends void ? { args?: undefined } : { args: A })
 
-export type Expr = {
+export type PrimitiveExpr = {
     feature: Feature<'string'>
 }
 
+export type Expr =
+    | PrimitiveExpr
+    | { type: 'not'; expr: Expr }
+    | { type: 'and' | 'or' | 'xor'; left: Expr; right: Expr }
+
 export function negateInPlace(expr: Expr): Expr {
+    if (!('feature' in expr)) return { type: 'not', expr }
+
     let feature: Feature = expr.feature
     for (; feature.child !== undefined; feature = feature.child);
     switch (feature.type) {

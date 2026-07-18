@@ -11,6 +11,7 @@ export type SolveResult = {
     primitiveFamilyMasks: Map<string, Set<Mask>>
     primitiveMasks: Set<Mask>
     withComplements: Set<Mask>
+    compositionIterations: number
     targetMaskCount: number
     fullMask: Mask
 }
@@ -37,17 +38,56 @@ export function solve<const Domain extends string>(
         withComplements.add(complement)
     }
 
-    return { best, primitiveFamilyMasks, primitiveMasks, withComplements, targetMaskCount: fullMask - 1, fullMask }
+    const compositionIterations = closeCompositions()
 
-    function save(expr: Expr, mask: Mask) {
+    return {
+        best,
+        primitiveFamilyMasks,
+        primitiveMasks,
+        withComplements,
+        compositionIterations,
+        targetMaskCount: fullMask - 1,
+        fullMask,
+    }
+
+    function save(expr: Expr, mask: Mask): boolean {
+        if (mask === 0 || mask === fullMask) return false
         const current = best.get(mask)
-        if (current === undefined || exprCostCompare(expr, current) < 0) best.set(mask, expr)
+        if (current !== undefined && exprCostCompare(expr, current) >= 0) return false
+        best.set(mask, expr)
+        return true
     }
 
     function addFamilyMask(family: string, mask: Mask) {
         const masks = primitiveFamilyMasks.get(family)
         if (masks) masks.add(mask)
         else primitiveFamilyMasks.set(family, new Set([mask]))
+    }
+
+    function closeCompositions(): number {
+        let iterations = 0
+        let improved = true
+
+        while (improved) {
+            improved = false
+            iterations++
+            const entries = [...best.entries()]
+
+            for (const [leftMask, left] of entries) {
+                for (const [rightMask, right] of entries) {
+                    const intersection = leftMask & rightMask
+                    improved = save({ type: 'and', left, right }, intersection) || improved
+
+                    const union = leftMask | rightMask
+                    improved = save({ type: 'or', left, right }, union) || improved
+
+                    const xor = leftMask ^ rightMask
+                    improved = save({ type: 'xor', left, right }, xor) || improved
+                }
+            }
+        }
+
+        return iterations - 1
     }
 
     function* candidates(): Generator<Candidate> {

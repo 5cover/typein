@@ -23,6 +23,7 @@ export function coverageReport(domain: readonly string[], result: SolveResult): 
         ['combined unique', `${result.primitiveMasks.size} masks`],
         ['with complements', `${result.withComplements.size} masks`],
         ['after composition', `${result.best.size} masks`],
+        ['composition passes', `${result.compositionIterations}`],
         ['total target', `${result.targetMaskCount} masks`],
         ['coverage', `${formatPercent(result.best.size / result.targetMaskCount)}`],
     ]

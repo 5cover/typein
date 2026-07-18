@@ -2,7 +2,21 @@ import tsc from 'typescript'
 import type { Expr, Feature } from './ir.js'
 const f = tsc.factory
 export function expr2ts(expr: Expr, variable = 'x'): tsc.Expression {
+    if ('type' in expr) return exprToExpression(expr, variable)
     return featureToExpression(f.createIdentifier(variable), expr.feature)
+}
+
+function exprToExpression(expr: Exclude<Expr, { feature: Feature<'string'> }>, variable: string): tsc.Expression {
+    switch (expr.type) {
+        case 'not':
+            return f.createLogicalNot(expr2ts(expr.expr, variable))
+        case 'and':
+            return f.createLogicalAnd(expr2ts(expr.left, variable), expr2ts(expr.right, variable))
+        case 'or':
+            return f.createLogicalOr(expr2ts(expr.left, variable), expr2ts(expr.right, variable))
+        case 'xor':
+            return f.createStrictInequality(expr2ts(expr.left, variable), expr2ts(expr.right, variable))
+    }
 }
 
 function featureToExpression(parent: tsc.Expression, feat: Feature): tsc.Expression {
@@ -20,7 +34,7 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
             return f.createElementAccessExpression(parent, f.createNumericLiteral(feat.args.n))
         case 'at':
             return f.createCallExpression(f.createPropertyAccessExpression(parent, 'at'), undefined, [
-                f.createNumericLiteral(-feat.args['-n']),
+                f.createPrefixUnaryExpression(tsc.SyntaxKind.MinusToken, f.createNumericLiteral(feat.args['-n'])),
             ])
         case 'charCodeAt':
             return f.createCallExpression(f.createPropertyAccessExpression(parent, 'charCodeAt'), undefined, [
