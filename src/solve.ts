@@ -77,6 +77,7 @@ export type SolveProfile = {
     compositionPruned: number
     compositionConsidered: number
     compositionImprovements: number
+    compositionQueuedPairs: number
 }
 
 export function solve<const Domain extends string>(
@@ -95,6 +96,7 @@ export function solve<const Domain extends string>(
         compositionPruned: 0,
         compositionConsidered: 0,
         compositionImprovements: 0,
+        compositionQueuedPairs: 0,
     }
     let generation = 0
 
@@ -238,45 +240,91 @@ export function solve<const Domain extends string>(
     }
 
     function closeCompositions(): number {
-        const queue = [...winners.values()]
-        let readIndex = 0
         let maxDepth = 0
+        let changed = false
+        let pass = 0
 
-        while (readIndex < queue.length) {
-            const left = queue[readIndex++]!
-            if (winners.get(left.mask)?.generation !== left.generation) continue
+        do {
+            changed = false
+            pass++
 
-            const entries = [...winners.values()]
-            for (const right of entries) {
-                if (left.generation < right.generation) continue
-                maxDepth = Math.max(maxDepth, tryCompose('and', left, right))
-                maxDepth = Math.max(maxDepth, tryCompose('or', left, right))
-                maxDepth = Math.max(maxDepth, tryCompose('xor', left, right))
+            const snapshot = [...winners.values()].sort(compareWinnerCost)
+            const queue = new PairQueue()
+            let maxCurrentCost = currentMaxSourceCost()
+
+            for (let i = 0; i < snapshot.length; ++i) {
+                pushPair(queue, {
+                    leftIndex: i,
+                    rightIndex: 0,
+                    lowerBound: compositionLowerBound('and', snapshot[i]!, snapshot[0]!),
+                })
             }
-        }
+
+            for (let item = queue.pop(); item !== undefined; item = queue.pop()) {
+                if (winners.size === fullMask - 1 && item.lowerBound > maxCurrentCost) break
+
+                const left = snapshot[item.leftIndex]!
+                const right = snapshot[item.rightIndex]!
+                let itemImproved = false
+                for (const family of ['and', 'or', 'xor'] as const) {
+                    const winnerDepth = tryCompose(family, left, right)
+                    if (winnerDepth === 0) continue
+
+                    maxDepth = Math.max(maxDepth, winnerDepth)
+                    itemImproved = true
+                    changed = true
+                }
+
+                if (item.rightIndex < item.leftIndex) {
+                    const nextRightIndex = item.rightIndex + 1
+                    pushPair(queue, {
+                        leftIndex: item.leftIndex,
+                        rightIndex: nextRightIndex,
+                        lowerBound: compositionLowerBound('and', left, snapshot[nextRightIndex]!),
+                    })
+                }
+
+                if (itemImproved) maxCurrentCost = currentMaxSourceCost()
+            }
+        } while (changed)
 
         return maxDepth
 
         function tryCompose(family: 'and' | 'or' | 'xor', left: Winner, right: Winner): number {
             profile.compositionAttempts++
-            const mask = composeMask(family, left.mask, right.mask)
-            if (!isTargetMask(mask) || shouldPruneSourceComposition(family, left, right, mask)) {
+            const target = composeMask(family, left.mask, right.mask)
+            if (!isTargetMask(target) || shouldPruneSourceComposition(family, left, right, target)) {
                 profile.compositionPruned++
                 return 0
             }
 
             profile.compositionConsidered++
+            const [first, second] = orderOperands(left, right)
             const improved = consider({
-                expr: { type: family, left: left.expr, right: right.expr },
-                mask,
-                source: { family, kind: 'composition', parents: [left.mask, right.mask], iteration: Math.max(left.depth, right.depth) + 1 },
+                expr: { type: family, left: first.expr, right: second.expr },
+                mask: target,
+                source: { family, kind: 'composition', parents: [first.mask, second.mask], iteration: pass },
             })
             if (!improved) return 0
 
             profile.compositionImprovements++
-            const winner = winners.get(mask)!
-            queue.push(winner)
+            const winner = winners.get(target)!
             return winner.depth
+        }
+
+        function currentMaxSourceCost(): number {
+            if (winners.size < fullMask - 1) return Number.POSITIVE_INFINITY
+
+            let max = 0
+            for (const winner of winners.values()) {
+                max = Math.max(max, sourceLength(winner.expr))
+            }
+            return max
+        }
+
+        function pushPair(queue: PairQueue, item: PairQueueItem): void {
+            profile.compositionQueuedPairs++
+            queue.push(item)
         }
     }
 
@@ -286,9 +334,13 @@ export function solve<const Domain extends string>(
         const current = winners.get(mask)
         if (current === undefined) return false
 
-        const operatorLength = family === 'xor' ? ' !== '.length : ' && '.length
-        const lowerBound = sourceLength(left.expr) + operatorLength + sourceLength(right.expr)
+        const lowerBound = compositionLowerBound(family, left, right)
         return lowerBound > sourceLength(current.expr)
+    }
+
+    function compositionLowerBound(family: 'and' | 'or' | 'xor', left: Winner, right: Winner): number {
+        const operatorLength = family === 'xor' ? ' !== '.length : ' && '.length
+        return sourceLength(left.expr) + operatorLength + sourceLength(right.expr)
     }
 
     function composeMask(family: 'and' | 'or' | 'xor', leftMask: Mask, rightMask: Mask): Mask {
@@ -300,6 +352,15 @@ export function solve<const Domain extends string>(
             case 'xor':
                 return leftMask ^ rightMask
         }
+    }
+
+    function compareWinnerCost(a: Winner, b: Winner): number {
+        return exprCostCompare(a.expr, b.expr)
+    }
+
+    function orderOperands(left: Winner, right: Winner): readonly [Winner, Winner] {
+        if (compareWinnerCost(right, left) < 0) return [right, left]
+        return [left, right]
     }
 
     function* candidates(): Generator<Candidate> {
@@ -545,4 +606,66 @@ function groupBy<T, K>(list: readonly T[], getKey: (item: T) => K) {
         else previous.set(group, [currentItem])
         return previous
     }, new Map<K, T[]>())
+}
+
+type PairQueueItem = {
+    leftIndex: number
+    rightIndex: number
+    lowerBound: number
+}
+
+class PairQueue {
+    #items: PairQueueItem[] = []
+
+    push(item: PairQueueItem): void {
+        this.#items.push(item)
+        this.#bubbleUp(this.#items.length - 1)
+    }
+
+    pop(): PairQueueItem | undefined {
+        const first = this.#items[0]
+        const last = this.#items.pop()
+        if (first === undefined || last === undefined) return undefined
+
+        if (this.#items.length > 0) {
+            this.#items[0] = last
+            this.#bubbleDown(0)
+        }
+
+        return first
+    }
+
+    #bubbleUp(index: number): void {
+        while (index > 0) {
+            const parent = (index - 1) >> 1
+            if (this.#items[parent]!.lowerBound <= this.#items[index]!.lowerBound) break
+            this.#swap(index, parent)
+            index = parent
+        }
+    }
+
+    #bubbleDown(index: number): void {
+        for (;;) {
+            const left = index * 2 + 1
+            const right = left + 1
+            let smallest = index
+
+            if (left < this.#items.length && this.#items[left]!.lowerBound < this.#items[smallest]!.lowerBound) {
+                smallest = left
+            }
+            if (right < this.#items.length && this.#items[right]!.lowerBound < this.#items[smallest]!.lowerBound) {
+                smallest = right
+            }
+            if (smallest === index) break
+
+            this.#swap(index, smallest)
+            index = smallest
+        }
+    }
+
+    #swap(left: number, right: number): void {
+        const temporary = this.#items[left]!
+        this.#items[left] = this.#items[right]!
+        this.#items[right] = temporary
+    }
 }

@@ -98,10 +98,11 @@ export function profileReport(result: SolveResult, cli: CliProfile): string {
         markdownTable(
             ['counter', 'count'],
             [
-                ['attempts', solve.compositionAttempts.toString()],
-                ['pruned/rejected before consider', solve.compositionPruned.toString()],
-                ['considered', solve.compositionConsidered.toString()],
+                ['target candidates', solve.compositionAttempts.toString()],
+                ['lower-bound skips', solve.compositionPruned.toString()],
+                ['materialized', solve.compositionConsidered.toString()],
                 ['improvements', solve.compositionImprovements.toString()],
+                ['queued pairs', solve.compositionQueuedPairs.toString()],
             ],
         ),
     ].join('\n')
