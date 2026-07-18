@@ -28,8 +28,9 @@ const program = new Command()
     .addOption(new Option('--cost <name>', 'cost comparison function').choices(supportedCosts).default('source' as const))
     .option('--report', 'write coverage and interest reports to stderr')
     .option('--test', 'verify generated expressions against their masks')
-    .option('--type-name <name>', 'generated TypeScript union name', 'Typestring')
+    .option('--type-name <name>', 'generated TypeScript union name', 'Domain')
     .option('--parameter-name <name>', 'generated predicate parameter name', 's')
+    .option('--guard-key <name>', 'registry leaf key for type guard functions', 'is')
     .parse()
 
 const opts = program.opts()
@@ -39,7 +40,7 @@ if (opts.listBuiltins) {
 }
 
 const domain = resolveDomain(program.args, opts.builtin ?? [])
-validateDomain(domain)
+validateDomain(domain, opts.guardKey)
 const result = solve(domain, costComparators[opts.cost])
 
 if (opts.report) {
@@ -66,7 +67,7 @@ if (opts.test) {
 
 switch (opts.language) {
     case 'ts':
-        process.stdout.write(emit.tsModule(domain, result.best, opts.typeName, opts.parameterName))
+        process.stdout.write(emit.tsModule(domain, result.best, opts.typeName, opts.parameterName, opts.guardKey))
         break
 }
 
@@ -79,9 +80,9 @@ function resolveDomain(positional: readonly string[], builtins: readonly Builtin
     return [...new Set(parts)]
 }
 
-function validateDomain(domain: readonly string[]) {
-    if (domain.includes('is')) {
-        program.error('domain value "is" conflicts with the generated registry guard key')
+function validateDomain(domain: readonly string[], guardKey: string) {
+    if (domain.includes(guardKey)) {
+        program.error(`domain value "${guardKey}" conflicts with the generated registry guard key; use --guard-key to choose another key`)
     }
 
     if (domain.length > 30) {

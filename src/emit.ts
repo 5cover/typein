@@ -19,45 +19,19 @@ export function tsModule<S extends string>(
     best: Map<Mask, Expr>,
     typeName: string,
     parameterName = 's',
+    guardKey = 'is',
 ): string {
     const sortedDomain = [...S].sort()
     const statements: tsc.Statement[] = []
 
-    if (S.includes('is' as S)) throw new Error('domain value "is" conflicts with the registry guard key')
+    if (S.includes(guardKey as S)) throw new Error(`domain value "${guardKey}" conflicts with the registry guard key`)
 
     statements.push(createExportedTypeAlias(typeName, sortedDomain))
-    statements.push(createRegistryTypeAlias(typeName))
-    statements.push(createRegistryDeclaration(S, best, typeName, parameterName))
-    statements.push(f.createExportDefault(f.createIdentifier('registry')))
+    statements.push(
+        f.createExportDefault(registryNodeExpression(registryTree(S, best), typeName, parameterName, guardKey)),
+    )
 
     return printStatements(statements)
-}
-
-function createRegistryDeclaration<S extends string>(
-    S: readonly S[],
-    best: Map<Mask, Expr>,
-    typeName: string,
-    parameterName: string,
-): tsc.VariableStatement {
-    const root = registryTree(S, best)
-
-    return f.createVariableStatement(
-        undefined,
-        f.createVariableDeclarationList(
-            [
-                f.createVariableDeclaration(
-                    'registry',
-                    undefined,
-                    undefined,
-                    f.createSatisfiesExpression(
-                        registryNodeExpression(root, typeName, parameterName),
-                        f.createTypeReferenceNode('Registry'),
-                    ),
-                ),
-            ],
-            tsc.NodeFlags.Const,
-        ),
-    )
 }
 
 function registryTree<S extends string>(S: readonly S[], best: Map<Mask, Expr>): RegistryNode {
@@ -82,13 +56,18 @@ function registryTree<S extends string>(S: readonly S[], best: Map<Mask, Expr>):
     return root
 }
 
-function registryNodeExpression(node: RegistryNode, typeName: string, parameterName: string): tsc.Expression {
+function registryNodeExpression(
+    node: RegistryNode,
+    typeName: string,
+    parameterName: string,
+    guardKey: string,
+): tsc.Expression {
     const properties: tsc.ObjectLiteralElementLike[] = []
 
     if (node.guard !== undefined) {
         properties.push(
             f.createPropertyAssignment(
-                'is',
+                f.createStringLiteral(guardKey),
                 createTypeGuard({
                     typeName,
                     parameterName,
@@ -100,7 +79,12 @@ function registryNodeExpression(node: RegistryNode, typeName: string, parameterN
     }
 
     for (const [key, child] of [...node.children].sort(([a], [b]) => a.localeCompare(b))) {
-        properties.push(f.createPropertyAssignment(f.createStringLiteral(key), registryNodeExpression(child, typeName, parameterName)))
+        properties.push(
+            f.createPropertyAssignment(
+                f.createStringLiteral(key),
+                registryNodeExpression(child, typeName, parameterName, guardKey),
+            ),
+        )
     }
 
     return f.createObjectLiteralExpression(properties, true)
@@ -113,38 +97,6 @@ function createExportedTypeAlias(name: string, values: readonly string[]): tsc.T
         undefined,
         unionOfStringLiterals(values),
     )
-}
-
-function createRegistryTypeAlias(typeName: string): tsc.TypeAliasDeclaration {
-    const parameter = f.createParameterDeclaration(
-        undefined,
-        undefined,
-        's',
-        undefined,
-        f.createTypeReferenceNode(typeName),
-    )
-
-    const guard = f.createFunctionTypeNode(
-        undefined,
-        [parameter],
-        f.createTypePredicateNode(undefined, 's', f.createTypeReferenceNode(typeName)),
-    )
-
-    const recursive = f.createTypeLiteralNode([
-        f.createPropertySignature(
-            [f.createModifier(tsc.SyntaxKind.ReadonlyKeyword)],
-            'is',
-            f.createToken(tsc.SyntaxKind.QuestionToken),
-            guard,
-        ),
-        f.createIndexSignature(
-            [f.createModifier(tsc.SyntaxKind.ReadonlyKeyword)],
-            [f.createParameterDeclaration(undefined, undefined, 'value', undefined, f.createKeywordTypeNode(tsc.SyntaxKind.StringKeyword))],
-            f.createUnionTypeNode([f.createTypeReferenceNode('Registry'), guard, f.createKeywordTypeNode(tsc.SyntaxKind.UndefinedKeyword)]),
-        ),
-    ])
-
-    return f.createTypeAliasDeclaration([f.createModifier(tsc.SyntaxKind.ExportKeyword)], 'Registry', undefined, recursive)
 }
 
 function createTypeGuard(args: {
@@ -187,6 +139,7 @@ function unionOfStringLiterals(values: readonly string[]): tsc.TypeNode {
 
 export const printer = tsc.createPrinter({
     newLine: tsc.NewLineKind.LineFeed,
+    omitTrailingSemicolon: true,
 })
 
 export const sourceFile = tsc.createSourceFile('generated.ts', '', tsc.ScriptTarget.Latest, false, tsc.ScriptKind.TS)

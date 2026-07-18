@@ -63,6 +63,14 @@ import is from './generated.js'
 is.number.string.is(value)
 ```
 
+Conceptually, consumers can treat the default export like this:
+
+```ts
+type GuardKey = 'is'
+type Guard<T extends Domain = Domain> = (s: Domain) => s is T
+type Registry = { [S in Domain]?: Registry, [K in GuardKey]?: Guard }
+```
+
 Useful options:
 
 - `--report`: write coverage and interest-score reporting to stderr.
@@ -73,6 +81,7 @@ Useful options:
 - `--cost source`: select the source-size comparator. This is the only cost comparator for now.
 - `--type-name Name`: change the generated union type name.
 - `--parameter-name name`: change the generated predicate parameter name.
+- `--guard-key name`: change the registry leaf key for type guards. Defaults to `is`.
 
 The current mask implementation uses numeric bit operations, so CLI domains must contain unique values and at most 30 strings.
 
