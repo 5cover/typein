@@ -95,7 +95,6 @@ export function solve<const Domain extends string>(
         yield* lengthCandidates(m.lengths)
         yield* charAtCandidates(m.maxLength)
         yield* atCandidates(m.maxLength)
-        yield* charCodeAtCandidates(m.maxLength)
         yield* stringMembershipCandidates()
     }
 
@@ -200,52 +199,6 @@ export function solve<const Domain extends string>(
                                 child: {
                                     type: op,
                                     args: { type: 'lit', args: char },
-                                },
-                            },
-                        },
-                    }
-                }
-            }
-        }
-    }
-
-    function* charCodeAtCandidates(maxLength: number): Generator<Candidate> {
-        for (let i = 0; i < maxLength; ++i) {
-            const codesHere = groupBy(domain, s => s.charCodeAt(i))
-            const sortedCodes = [...codesHere.keys()]
-                .filter(code => !Number.isNaN(code))
-                .sort((a, b) => a - b)
-
-            for (const [code, subdomain] of codesHere) {
-                if (Number.isNaN(code)) continue
-                yield {
-                    family: 'char code equality',
-                    mask: computeMask(domain, s => subdomain.includes(s)),
-                    expr: {
-                        feature: {
-                            type: 'charCodeAt',
-                            args: { n: i },
-                            child: {
-                                type: '=',
-                                args: { type: 'lit', args: code },
-                            },
-                        },
-                    },
-                }
-            }
-
-            for (const code of sortedCodes) {
-                for (const op of ['<', '<=', '>', '>='] as const) {
-                    yield {
-                        family: 'char code relations',
-                        mask: computeMask(domain, s => compare(s.charCodeAt(i), op, code)),
-                        expr: {
-                            feature: {
-                                type: 'charCodeAt',
-                                args: { n: i },
-                                child: {
-                                    type: op,
-                                    args: { type: 'lit', args: code },
                                 },
                             },
                         },

@@ -93,7 +93,7 @@ ordered by simplicity ascending (implement earlier ones first, move down if need
 - `t.length OP n`
 - `t[n] OP c`
 - `t.at(-n) OP c`: terse length-n lookup
-- `t.charCodeAt(n) OP n`: equivalent to `t[n]`, but in the numeric domain. yet to see if semantics differ usefully or if this is relevant for performance
+- `t.charCodeAt(n)` numeric transforms: reserved for operations such as modulo, bit masks, and arithmetic relationships. Plain equality and ordering duplicate `t[n]` and are intentionally not generated.
 - `t.endsWith(s) OP b`
 - `t.startsWith(s) OP b`
 - `t.includes(s) OP b`
