@@ -2,9 +2,17 @@ import tsc from 'typescript'
 import { maskToNames } from './mask.js'
 import type { Mask } from './types.js'
 import * as compile from './compile.js'
-import type { Expr } from './ir.js';
+import type { Expr } from './ir.js'
 
 const f = tsc.factory
+
+type RegistryNode = {
+    guard?: {
+        names: readonly string[]
+        expr: Expr
+    }
+    children: Map<string, RegistryNode>
+}
 
 export function tsModule<S extends string>(
     S: readonly S[],
@@ -12,42 +20,90 @@ export function tsModule<S extends string>(
     typeName: string,
     parameterName = 's',
 ): string {
+    const sortedDomain = [...S].sort()
     const statements: tsc.Statement[] = []
 
-    statements.push(createExportedTypeAlias(typeName, S))
+    if (S.includes('is' as S)) throw new Error('domain value "is" conflicts with the registry guard key')
 
+    statements.push(createExportedTypeAlias(typeName, sortedDomain))
+    statements.push(createRegistryTypeAlias(typeName))
+    statements.push(createRegistryDeclaration(S, best, typeName, parameterName))
+    statements.push(f.createExportDefault(f.createIdentifier('registry')))
+
+    return printStatements(statements)
+}
+
+function createRegistryDeclaration<S extends string>(
+    S: readonly S[],
+    best: Map<Mask, Expr>,
+    typeName: string,
+    parameterName: string,
+): tsc.VariableStatement {
+    const root = registryTree(S, best)
+
+    return f.createVariableStatement(
+        undefined,
+        f.createVariableDeclarationList(
+            [
+                f.createVariableDeclaration(
+                    'registry',
+                    undefined,
+                    undefined,
+                    f.createSatisfiesExpression(
+                        registryNodeExpression(root, typeName, parameterName),
+                        f.createTypeReferenceNode('Registry'),
+                    ),
+                ),
+            ],
+            tsc.NodeFlags.Const,
+        ),
+    )
+}
+
+function registryTree<S extends string>(S: readonly S[], best: Map<Mask, Expr>): RegistryNode {
+    const root: RegistryNode = { children: new Map() }
     const entries = [...best.entries()]
-        .map(([mask, best]) => ({
-            mask,
-            best,
+        .map(([mask, expr]) => ({
+            expr,
             names: maskToNames(S, mask).sort(),
         }))
-        .sort((a, b) => {
-            const sa = subsetFunctionName(a.names)
-            const sb = subsetFunctionName(b.names)
-            return (
-                sa.length - sb.length ||
-                (sa < sb ? -1
-                : sa > sb ? 1
-                : 0)
-            )
-        })
+        .sort((a, b) => compareStringArrays(a.names, b.names))
 
-    for (const { best, names } of entries) {
-        const fnName = subsetFunctionName(names)
+    for (const entry of entries) {
+        let node = root
+        for (const name of entry.names) {
+            const child = node.children.get(name) ?? { children: new Map() }
+            node.children.set(name, child)
+            node = child
+        }
+        node.guard = entry
+    }
 
-        statements.push(
-            createExportedTypeGuard({
-                fnName,
-                parameterName,
-                parameterTypeName: typeName,
-                narrowedValues: names,
-                body: compile.expr2ts(best, parameterName),
-            }),
+    return root
+}
+
+function registryNodeExpression(node: RegistryNode, typeName: string, parameterName: string): tsc.Expression {
+    const properties: tsc.ObjectLiteralElementLike[] = []
+
+    if (node.guard !== undefined) {
+        properties.push(
+            f.createPropertyAssignment(
+                'is',
+                createTypeGuard({
+                    typeName,
+                    parameterName,
+                    narrowedValues: node.guard.names,
+                    body: compile.expr2ts(node.guard.expr, parameterName),
+                }),
+            ),
         )
     }
 
-    return printStatements(statements)
+    for (const [key, child] of [...node.children].sort(([a], [b]) => a.localeCompare(b))) {
+        properties.push(f.createPropertyAssignment(f.createStringLiteral(key), registryNodeExpression(child, typeName, parameterName)))
+    }
+
+    return f.createObjectLiteralExpression(properties, true)
 }
 
 function createExportedTypeAlias(name: string, values: readonly string[]): tsc.TypeAliasDeclaration {
@@ -59,19 +115,50 @@ function createExportedTypeAlias(name: string, values: readonly string[]): tsc.T
     )
 }
 
-function createExportedTypeGuard(args: {
-    fnName: string
+function createRegistryTypeAlias(typeName: string): tsc.TypeAliasDeclaration {
+    const parameter = f.createParameterDeclaration(
+        undefined,
+        undefined,
+        's',
+        undefined,
+        f.createTypeReferenceNode(typeName),
+    )
+
+    const guard = f.createFunctionTypeNode(
+        undefined,
+        [parameter],
+        f.createTypePredicateNode(undefined, 's', f.createTypeReferenceNode(typeName)),
+    )
+
+    const recursive = f.createTypeLiteralNode([
+        f.createPropertySignature(
+            [f.createModifier(tsc.SyntaxKind.ReadonlyKeyword)],
+            'is',
+            f.createToken(tsc.SyntaxKind.QuestionToken),
+            guard,
+        ),
+        f.createIndexSignature(
+            [f.createModifier(tsc.SyntaxKind.ReadonlyKeyword)],
+            [f.createParameterDeclaration(undefined, undefined, 'value', undefined, f.createKeywordTypeNode(tsc.SyntaxKind.StringKeyword))],
+            f.createUnionTypeNode([f.createTypeReferenceNode('Registry'), guard, f.createKeywordTypeNode(tsc.SyntaxKind.UndefinedKeyword)]),
+        ),
+    ])
+
+    return f.createTypeAliasDeclaration([f.createModifier(tsc.SyntaxKind.ExportKeyword)], 'Registry', undefined, recursive)
+}
+
+function createTypeGuard(args: {
+    typeName: string
     parameterName: string
-    parameterTypeName: string
     narrowedValues: readonly string[]
     body: tsc.Expression
-}): tsc.VariableStatement {
+}): tsc.ArrowFunction {
     const parameter = f.createParameterDeclaration(
         undefined,
         undefined,
         args.parameterName,
         undefined,
-        f.createTypeReferenceNode(args.parameterTypeName),
+        f.createTypeReferenceNode(args.typeName),
     )
 
     const returnType = f.createTypePredicateNode(
@@ -80,21 +167,13 @@ function createExportedTypeGuard(args: {
         unionOfStringLiterals(args.narrowedValues),
     )
 
-    const arrow = f.createArrowFunction(
+    return f.createArrowFunction(
         undefined,
         undefined,
         [parameter],
         returnType,
         f.createToken(tsc.SyntaxKind.EqualsGreaterThanToken),
         args.body,
-    )
-
-    return f.createVariableStatement(
-        [f.createModifier(tsc.SyntaxKind.ExportKeyword)],
-        f.createVariableDeclarationList(
-            [f.createVariableDeclaration(args.fnName, undefined, undefined, arrow)],
-            tsc.NodeFlags.Const,
-        ),
     )
 }
 
@@ -116,16 +195,11 @@ function printStatements(statements: readonly tsc.Statement[]): string {
     return printer.printFile(file)
 }
 
-function subsetFunctionName(values: readonly string[]): string {
-    return 'is_' + values.map(identifierPart).join('_')
-}
+function compareStringArrays(left: readonly string[], right: readonly string[]): number {
+    for (let i = 0; i < Math.min(left.length, right.length); i++) {
+        const c = left[i]!.localeCompare(right[i]!)
+        if (c) return c
+    }
 
-function identifierPart(value: string): string {
-    const cleaned = value
-        .normalize('NFKD')
-        .replace(/[^\p{L}\p{N}_$]+/gu, '_')
-        .replace(/^(\p{N})/u, '_$1')
-        .replace(/^$/, '_')
-
-    return cleaned
+    return left.length - right.length
 }

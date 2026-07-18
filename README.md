@@ -55,6 +55,13 @@ typein [DOMAIN...]
 ```
 
 When `DOMAIN` is omitted, `typein` uses the JavaScript `typeof` strings. Generated TypeScript is written to stdout.
+The generated module default-exports a nested registry object. Each path is an alphabetically sorted subset of domain strings, and each node's `is` property is the type guard for that subset.
+
+```ts
+import is from './generated.js'
+
+is.number.string.is(value)
+```
 
 Useful options:
 

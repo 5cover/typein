@@ -80,6 +80,10 @@ function resolveDomain(positional: readonly string[], builtins: readonly Builtin
 }
 
 function validateDomain(domain: readonly string[]) {
+    if (domain.includes('is')) {
+        program.error('domain value "is" conflicts with the generated registry guard key')
+    }
+
     if (domain.length > 30) {
         program.error('domains larger than 30 values are not supported by the current numeric mask representation')
     }
