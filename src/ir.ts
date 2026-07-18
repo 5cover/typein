@@ -58,6 +58,10 @@ export type Expr =
     | { type: 'and' | 'or' | 'xor'; left: Expr; right: Expr }
 
 export function negateInPlace(expr: Expr): Expr {
+    return { type: 'not', expr }
+}
+
+export function invertLastPredicateInPlace(expr: Expr): Expr {
     if (!('feature' in expr)) return { type: 'not', expr }
 
     let feature: Feature = expr.feature
