@@ -3,12 +3,6 @@ import type { FamilyKind, SolveResult } from './solve.js'
 import type { Mask } from './types.js'
 import { costCodeValue, printExpression } from './cost.js'
 
-export function interestScore(cost: number, subsetSize: number, universeSize: number): number {
-    const entropy = entropyBits(subsetSize, universeSize)
-
-    return entropy === 0 ? Number.POSITIVE_INFINITY : cost / entropy
-}
-
 export function coverageReport(domain: readonly string[], result: SolveResult): string {
     const familyRows = [...result.familyStats.values()]
         .sort((a, b) => kindOrder(a.kind) - kindOrder(b.kind) || a.family.localeCompare(b.family))
@@ -23,55 +17,56 @@ export function coverageReport(domain: readonly string[], result: SolveResult): 
         ])
 
     const stageRows = [
-        ['primitive unique', result.stageMasks.primitives.size.toString(), formatPercent(result.stageMasks.primitives.size / result.targetMaskCount)],
-        ['with complements', result.stageMasks.complements.size.toString(), formatPercent(result.stageMasks.complements.size / result.targetMaskCount)],
-        ['after composition', result.stageMasks.composition.size.toString(), formatPercent(result.stageMasks.composition.size / result.targetMaskCount)],
+        [
+            'primitive unique',
+            result.stageMasks.primitives.size.toString(),
+            formatPercent(result.stageMasks.primitives.size / result.targetMaskCount),
+        ],
+        [
+            'with complements',
+            result.stageMasks.complements.size.toString(),
+            formatPercent(result.stageMasks.complements.size / result.targetMaskCount),
+        ],
+        [
+            'after composition',
+            result.stageMasks.composition.size.toString(),
+            formatPercent(result.stageMasks.composition.size / result.targetMaskCount),
+        ],
         ['target', result.targetMaskCount.toString(), formatPercent(1)],
     ]
 
     return [
         '## Family Coverage',
-        formatMarkdownTable(['family', 'kind', 'candidates', 'masks', 'new', 'improvements', 'winners'], familyRows),
-        '',
+        markdownTable(['family', 'kind', 'candidates', 'masks', 'new', 'improvements', 'winners'], familyRows),
         '## Stage Coverage',
-        formatMarkdownTable(['stage', 'masks', 'coverage'], stageRows),
-        '',
-        `composition passes: ${result.compositionPasses}`,
+        markdownTable(['stage', 'masks', 'coverage'], stageRows),
+        `Composition passes: ${result.compositionPasses}`,
     ].join('\n')
 }
 
 export function interestReport(domain: readonly string[], result: SolveResult, limit = 10): string {
-    const entries = [...result.best.entries()]
+    const entries = result.best
+        .entries()
         .map(([mask, expr]) => {
             const names = maskToNames(domain, mask)
             const cost = costCodeValue(expr)
             const entropy = entropyBits(names.length, domain.length)
             return {
                 mask,
+                cost,
                 names,
                 entropy,
-                score: interestScore(cost, names.length, domain.length),
+                score: entropy / cost,
                 code: printExpression(expr, 's'),
             }
         })
+        .toArray()
+        .sort((a, b) => b.score - a.score || a.code.localeCompare(b.code))
 
-    const notable = entries
-        .toSorted((a, b) => a.score - b.score || popcount(b.mask) - popcount(a.mask) || a.code.localeCompare(b.code))
-        .slice(0, limit)
+    const best = entries.slice(0, limit)
+    const worst = entries.slice(-limit)
 
-    const leastEntropy = entries
-        .toSorted((a, b) => a.entropy - b.entropy || a.score - b.score || a.code.localeCompare(b.code))
-        .slice(0, limit)
-
-    if (entries.length === 0) return '## Interesting Expressions\n\nnone'
-
-    return [
-        '## Interesting Expressions',
-        formatExpressionTable(notable),
-        '',
-        '## Least Entropy Expressions',
-        formatExpressionTable(leastEntropy),
-    ].join('\n')
+    return ['## Notable Expressions', formatExpressionTable([...best, ...worst])].join('\n')
 }
 
 function entropyBits(subsetSize: number, universeSize: number): number {
@@ -85,31 +80,31 @@ function formatPercent(value: number): string {
 
 function formatExpressionTable(
     rows: readonly {
+        cost: number
+        score: number
         entropy: number
         names: readonly string[]
         code: string
     }[],
 ): string {
-    return formatMarkdownTable(
-        ['entropy', 'partition', 'expression'],
-        rows.map(row => [formatNumber(row.entropy), row.names.join(', '), code(row.code)]),
+    return markdownTable(
+        ['score', 'cost', 'entropy', 'partition', 'expression'],
+        rows.map(row => [
+            formatNumber(row.score),
+            formatNumber(row.cost),
+            formatNumber(row.entropy),
+            row.names.join(' '),
+            code(row.code),
+        ]),
     )
 }
 
-function formatMarkdownTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
-    return [
-        markdownRow(headers),
-        markdownRow(headers.map(() => '---')),
-        ...rows.map(markdownRow),
-    ].join('\n')
+function markdownTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
+    return ['', markdownRow(headers), markdownRow(headers.map(() => '---')), ...rows.map(markdownRow), ''].join('\n')
 }
 
 function markdownRow(cells: readonly string[]): string {
-    return `| ${cells.map(escapeMarkdownCell).join(' | ')} |`
-}
-
-function escapeMarkdownCell(cell: string): string {
-    return cell.replaceAll('|', '\\|').replaceAll('\n', '<br>')
+    return `| ${cells.join(' | ')} |`
 }
 
 function code(value: string): string {
