@@ -1,4 +1,4 @@
-import { notExpr, type Expr } from './ir.js'
+import { invertLastPredicateInPlace, notExpr, type Expr } from './ir.js'
 import { computeMask } from './mask.js'
 import type { Mask } from './types.js'
 
@@ -76,7 +76,7 @@ export function solve<const Domain extends string>(
 
         if (isTargetMask(candidate.mask)) {
             consider({
-                expr: notExpr(structuredClone(candidate.expr)),
+                expr: complementExpr(candidate),
                 mask: fullMask ^ candidate.mask,
                 source: { family: 'not', kind: 'complement', parents: [candidate.mask] },
             })
@@ -99,6 +99,30 @@ export function solve<const Domain extends string>(
         compositionPasses,
         targetMaskCount: fullMask - 1,
         fullMask,
+    }
+
+    function complementExpr(candidate: Candidate): Expr {
+        const expr = structuredClone(candidate.expr)
+        return canInvertComplement(candidate) ? invertLastPredicateInPlace(expr) : notExpr(expr)
+    }
+
+    function canInvertComplement(candidate: Candidate): boolean {
+        switch (candidate.source.family) {
+            case 'length.relation':
+            case 'charAt.equality':
+            case 'at.equality':
+                return true
+            case 'charAt.relation':
+            case 'at.relation':
+            case 'startsWith':
+            case 'endsWith':
+            case 'includes':
+            case 'not':
+            case 'and':
+            case 'or':
+            case 'xor':
+                return false
+        }
     }
 
     function consider(candidate: Candidate): boolean {
