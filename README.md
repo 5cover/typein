@@ -104,7 +104,13 @@ Useful options:
 
 Builtin domains are intended both as examples and stress inputs. Use `typein for` for larger domains; `typein all` is intentionally exhaustive and can still be expensive. The full `css-properties` builtin contains the known CSS properties list; sliced variants such as `css-properties-50`, `css-properties-100`, `css-properties-250`, `css-properties-500`, and `css-properties-1000` are available for profiling.
 
-CSS-like hyphenated domains get extra query primitives. Typein derives delimiter presence, token count, first/last/middle/any-token masks, and anchored token-pattern regexes from the requested target values. These patterns are still verified against the full finite domain, so a generated regex is correct for the supplied universe rather than a claim about arbitrary strings.
+CSS-like hyphenated domains get extra native query primitives. Typein derives delimiter presence, token count, first/last/middle/any-token masks, offset `startsWith`, and `indexOf`/`lastIndexOf` relation masks from the requested target values. For arbitrary or scattered subsets, query mode may use a native finite-set check:
+
+```ts
+(["a", "b"] as readonly string[]).includes(s)
+```
+
+Regex-backed token patterns are disabled by default. They can be enabled with `--query-regex`, but regex is treated as a separate embedded language with a much higher analysis ceiling than native string predicates.
 
 The CSS query benchmark ladder can be run with:
 
@@ -124,6 +130,7 @@ For large query domains, `--profile` distinguishes exact correctness from search
 - `--query-superset-pre-frontier count`
 - `--query-superset-frontier count`
 - `--query-dnf-frontier count`
+- `--query-regex`: allow regex-backed query candidates. Disabled by default.
 
 `--report` includes two coverage tables. In the family table:
 
