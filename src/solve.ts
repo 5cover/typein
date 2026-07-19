@@ -83,6 +83,15 @@ export type SolveProfile = {
 
 export type QueryProfile = SolveProfile & {
     targetFound: boolean
+    primitiveCandidates: number
+    primitiveDiscarded: number
+    exactCandidates: number
+    subsetCandidates: number
+    supersetCandidates: number
+    orStates: number
+    andStates: number
+    dnfTermsAttempted: number
+    proof: 'query-normal-forms' | 'bounded-query-normal-forms'
 }
 
 export type QueryResult = {
@@ -623,12 +632,23 @@ type QueryWinner = {
     depth: number
 }
 
+type QueryAtom = {
+    mask: BigMask
+    expr: Expr
+    cost: number
+}
+
+type QuerySearchResult = {
+    mask: BigMask
+    expr: Expr | undefined
+    cost: number
+}
+
 export function solveQuery<const Domain extends string>(
     domain: readonly Domain[],
     targetValues: readonly Domain[],
     exprCostCompare: (a: Expr, b: Expr) => number,
 ): QueryResult {
-    const winners = new Map<BigMask, QueryWinner>()
     const fullMask = (1n << BigInt(domain.length)) - 1n
     const targetValueSet = new Set(targetValues)
     const targetMask = computeBigMask(domain, s => targetValueSet.has(s))
@@ -641,40 +661,288 @@ export function solveQuery<const Domain extends string>(
         compositionConsidered: 0,
         compositionImprovements: 0,
         compositionQueuedPairs: 0,
-        targetFound: false,
+        targetFound: true,
+        primitiveCandidates: 0,
+        primitiveDiscarded: 0,
+        exactCandidates: 0,
+        subsetCandidates: 0,
+        supersetCandidates: 0,
+        orStates: 0,
+        andStates: 0,
+        dnfTermsAttempted: 0,
+        proof: 'query-normal-forms',
     }
-    let generation = 0
+    const fallback = exactSubsetExpr(targetValues)
+    let best = fallback
+    let bestCost = sourceLength(fallback)
+    let proof: QueryProfile['proof'] = 'query-normal-forms'
+    const subsetAtoms = new Map<BigMask, QueryAtom>()
+    const supersetAtoms = new Map<BigMask, QueryAtom>()
 
     const primitiveStart = performance.now()
-    consider({
-        expr: exactSubsetExpr(targetValues),
-        mask: targetMask,
-        source: { family: 'or', kind: 'composition', parents: [], iteration: 0 },
-    })
-
-    for (const candidate of bigCandidates()) {
-        consider(candidate)
-
-        if (isUsefulIntermediate(candidate.mask)) {
-            consider({
-                expr: queryComplementExpr(candidate),
-                mask: fullMask ^ candidate.mask,
-                source: { family: 'not', kind: 'complement', parents: [candidate.mask] },
-            })
-        }
-    }
+    for (const candidate of targetCandidates()) considerPrimitive(candidate)
     profile.primitiveMs = performance.now() - primitiveStart
 
     const compositionStart = performance.now()
-    closeQueryCompositions()
+    const orResult = searchOrCover(reduceSubsetAtoms([...subsetAtoms.values()]), bestCost)
+    if (orResult !== undefined) improve(orResult.expr)
+
+    const reducedSupersetAtoms = queryFrontier(reduceSupersetAtoms(queryFrontier([...supersetAtoms.values()], 512)), 64)
+    const andResult = searchAndFilter(reducedSupersetAtoms, bestCost)
+    if (andResult !== undefined) improve(andResult.expr)
+
+    const dnfAtoms = pairwiseAndTerms(queryFrontier(reducedSupersetAtoms, 32), bestCost)
+    if (dnfAtoms.length > 0) {
+        const dnfResult = searchOrCover(reduceSubsetAtoms([...subsetAtoms.values(), ...dnfAtoms]), bestCost)
+        if (dnfResult !== undefined) improve(dnfResult.expr)
+    }
     profile.compositionMs = performance.now() - compositionStart
+    profile.proof = proof
 
-    profile.targetFound = winners.has(targetMask)
     const finalizeStart = performance.now()
-    const expr = winners.get(targetMask)?.expr ?? exactSubsetExpr(targetValues)
     profile.finalizeMs = performance.now() - finalizeStart
+    return { expr: best, profile, targetValues }
 
-    return { expr, profile, targetValues }
+    function considerPrimitive(candidate: BigCandidate): void {
+        profile.primitiveCandidates++
+        if (sourceLength(candidate.expr) >= bestCost) {
+            profile.primitiveDiscarded++
+            return
+        }
+
+        considerAtom(candidate.mask, candidate.expr)
+
+        if (isUsefulIntermediate(candidate.mask)) {
+            const complementExpr = queryComplementExpr(candidate)
+            if (sourceLength(complementExpr) < bestCost) considerAtom(fullMask ^ candidate.mask, complementExpr)
+        }
+    }
+
+    function considerAtom(mask: BigMask, expr: Expr): void {
+        if (mask === targetMask) {
+            profile.exactCandidates++
+            improve(expr)
+            return
+        }
+
+        let retained = false
+        if (isStrictTargetSubset(mask)) {
+            profile.subsetCandidates++
+            retained = retainCheapest(subsetAtoms, mask, expr)
+        }
+
+        if (isStrictTargetSuperset(mask)) {
+            profile.supersetCandidates++
+            retained = retainCheapest(supersetAtoms, mask, expr) || retained
+        }
+
+        if (!retained) profile.primitiveDiscarded++
+    }
+
+    function improve(expr: Expr | undefined): boolean {
+        if (expr === undefined || exprCostCompare(expr, best) >= 0) return false
+
+        best = expr
+        bestCost = sourceLength(expr)
+        profile.compositionImprovements++
+        return true
+    }
+
+    function retainCheapest(map: Map<BigMask, QueryAtom>, mask: BigMask, expr: Expr): boolean {
+        const current = map.get(mask)
+        if (current !== undefined && exprCostCompare(expr, current.expr) >= 0) return false
+
+        map.set(mask, { mask, expr, cost: sourceLength(expr) })
+        return true
+    }
+
+    function reduceSubsetAtoms(atoms: readonly QueryAtom[]): QueryAtom[] {
+        const reduced: QueryAtom[] = []
+        for (const atom of atoms.filter(atom => atom.cost < bestCost).sort((a, b) => a.cost - b.cost)) {
+            if (reduced.some(existing => covers(existing.mask, atom.mask) && existing.cost <= atom.cost)) continue
+
+            for (let i = reduced.length - 1; i >= 0; --i) {
+                if (covers(atom.mask, reduced[i]!.mask) && atom.cost <= reduced[i]!.cost) reduced.splice(i, 1)
+            }
+            reduced.push(atom)
+        }
+        return reduced
+    }
+
+    function reduceSupersetAtoms(atoms: readonly QueryAtom[]): QueryAtom[] {
+        const reduced: QueryAtom[] = []
+        for (const atom of atoms.filter(atom => atom.cost < bestCost).sort((a, b) => a.cost - b.cost)) {
+            if (reduced.some(existing => covers(atom.mask, existing.mask) && existing.cost <= atom.cost)) continue
+
+            for (let i = reduced.length - 1; i >= 0; --i) {
+                if (covers(reduced[i]!.mask, atom.mask) && atom.cost <= reduced[i]!.cost) reduced.splice(i, 1)
+            }
+            reduced.push(atom)
+        }
+        return reduced
+    }
+
+    function queryFrontier(atoms: readonly QueryAtom[], maxSize: number): QueryAtom[] {
+        if (atoms.length <= maxSize) return [...atoms]
+
+        proof = 'bounded-query-normal-forms'
+        return [...atoms]
+            .sort((a, b) => falsePositiveCount(a.mask) - falsePositiveCount(b.mask) || a.cost - b.cost || exprCostCompare(a.expr, b.expr))
+            .slice(0, maxSize)
+    }
+
+    function searchOrCover(atoms: readonly QueryAtom[], bound: number): QuerySearchResult | undefined {
+        const usefulAtoms = atoms
+            .filter(atom => atom.cost < bound && isStrictTargetSubset(atom.mask))
+            .sort((a, b) => a.cost - b.cost || exprCostCompare(a.expr, b.expr))
+        const bestStates = new Map<BigMask, QuerySearchResult>()
+        const queue = new QueryQueue()
+
+        const start = { mask: 0n, expr: undefined, cost: 0 }
+        bestStates.set(0n, start)
+        queue.push(start)
+
+        for (let state = queue.pop(); state !== undefined; state = queue.pop()) {
+            if (bestStates.get(state.mask)?.cost !== state.cost) continue
+            if (state.cost >= bound) continue
+
+            profile.orStates++
+            if (profile.orStates > 200) {
+                proof = 'bounded-query-normal-forms'
+                return undefined
+            }
+            if (state.mask === targetMask && state.expr !== undefined) return state
+
+            for (const atom of usefulAtoms) {
+                const nextMask = state.mask | atom.mask
+                if (nextMask === state.mask) continue
+
+                profile.compositionAttempts++
+                const lowerBound = state.expr === undefined ? atom.cost : state.cost + ' || '.length + atom.cost
+                if (lowerBound >= bound) {
+                    profile.compositionPruned++
+                    continue
+                }
+
+                const nextExpr: Expr = state.expr === undefined ? atom.expr : { type: 'or', left: state.expr, right: atom.expr }
+                const nextCost = sourceLength(nextExpr)
+                profile.compositionConsidered++
+                if (nextCost >= bound) continue
+
+                const current = bestStates.get(nextMask)
+                if (current !== undefined && nextCost >= current.cost) continue
+
+                const next = { mask: nextMask, expr: nextExpr, cost: nextCost }
+                bestStates.set(nextMask, next)
+                queue.push(next)
+            }
+        }
+
+        return undefined
+    }
+
+    function searchAndFilter(atoms: readonly QueryAtom[], bound: number): QuerySearchResult | undefined {
+        const usefulAtoms = atoms
+            .filter(atom => atom.cost < bound && isStrictTargetSuperset(atom.mask))
+            .sort((a, b) => a.cost - b.cost || exprCostCompare(a.expr, b.expr))
+        const bestStates = new Map<BigMask, QuerySearchResult>()
+        const queue = new QueryQueue()
+
+        for (const atom of usefulAtoms) {
+            const current = bestStates.get(atom.mask)
+            if (current !== undefined && atom.cost >= current.cost) continue
+            const state = { mask: atom.mask, expr: atom.expr, cost: atom.cost }
+            bestStates.set(atom.mask, state)
+            queue.push(state)
+        }
+
+        for (let state = queue.pop(); state !== undefined; state = queue.pop()) {
+            if (bestStates.get(state.mask)?.cost !== state.cost) continue
+            if (state.cost >= bound) continue
+
+            profile.andStates++
+            if (profile.andStates > 200) {
+                proof = 'bounded-query-normal-forms'
+                return undefined
+            }
+            if (state.mask === targetMask && state.expr !== undefined) return state
+
+            for (const atom of usefulAtoms) {
+                const nextMask = state.mask & atom.mask
+                if (nextMask === state.mask || !containsTarget(nextMask)) continue
+
+                profile.compositionAttempts++
+                const lowerBound = state.cost + ' && '.length + atom.cost
+                if (lowerBound >= bound) {
+                    profile.compositionPruned++
+                    continue
+                }
+
+                const nextExpr: Expr = { type: 'and', left: state.expr!, right: atom.expr }
+                const nextCost = sourceLength(nextExpr)
+                profile.compositionConsidered++
+                if (nextCost >= bound) continue
+
+                const current = bestStates.get(nextMask)
+                if (current !== undefined && nextCost >= current.cost) continue
+
+                const next = { mask: nextMask, expr: nextExpr, cost: nextCost }
+                bestStates.set(nextMask, next)
+                queue.push(next)
+            }
+        }
+
+        return undefined
+    }
+
+    function pairwiseAndTerms(atoms: readonly QueryAtom[], bound: number): QueryAtom[] {
+        const terms = new Map<BigMask, QueryAtom>()
+        const usefulAtoms = atoms.filter(atom => atom.cost < bound && isStrictTargetSuperset(atom.mask)).sort((a, b) => a.cost - b.cost)
+
+        for (let i = 0; i < usefulAtoms.length; ++i) {
+            const left = usefulAtoms[i]!
+            for (let j = i; j < usefulAtoms.length; ++j) {
+                const right = usefulAtoms[j]!
+                profile.dnfTermsAttempted++
+
+                const lowerBound = left.cost + ' && '.length + right.cost
+                if (lowerBound >= bound) break
+
+                const mask = left.mask & right.mask
+                if (!isStrictTargetSubset(mask)) continue
+
+                const expr: Expr = i === j ? left.expr : { type: 'and', left: left.expr, right: right.expr }
+                if (sourceLength(expr) >= bound) continue
+                retainCheapest(terms, mask, expr)
+            }
+        }
+
+        return [...terms.values()]
+    }
+
+    function isUsefulIntermediate(mask: BigMask): boolean {
+        return mask !== 0n && mask !== fullMask
+    }
+
+    function isStrictTargetSubset(mask: BigMask): boolean {
+        return mask !== 0n && mask !== targetMask && (mask & ~targetMask) === 0n
+    }
+
+    function isStrictTargetSuperset(mask: BigMask): boolean {
+        return mask !== fullMask && mask !== targetMask && containsTarget(mask)
+    }
+
+    function containsTarget(mask: BigMask): boolean {
+        return (targetMask & ~mask) === 0n
+    }
+
+    function covers(left: BigMask, right: BigMask): boolean {
+        return (right & ~left) === 0n
+    }
+
+    function falsePositiveCount(mask: BigMask): number {
+        return popcountBig(mask & ~targetMask)
+    }
 
     function queryComplementExpr(candidate: BigCandidate): Expr {
         const expr = structuredClone(candidate.expr)
@@ -705,149 +973,7 @@ export function solveQuery<const Domain extends string>(
         }
     }
 
-    function consider(candidate: BigCandidate): boolean {
-        if (!isUsefulIntermediate(candidate.mask) && candidate.mask !== targetMask) return false
-
-        const current = winners.get(candidate.mask)
-        if (current !== undefined && exprCostCompare(candidate.expr, current.expr) >= 0) return false
-
-        winners.set(candidate.mask, {
-            mask: candidate.mask,
-            expr: candidate.expr,
-            generation: generation++,
-            depth: candidateDepth(candidate),
-        })
-        return true
-    }
-
-    function candidateDepth(candidate: BigCandidate): number {
-        switch (candidate.source.kind) {
-            case 'primitive':
-            case 'complement':
-                return 0
-            case 'composition':
-                return Math.max(0, ...(candidate.source.parents ?? []).map(mask => winners.get(mask)?.depth ?? 0)) + 1
-        }
-    }
-
-    function isUsefulIntermediate(mask: BigMask): boolean {
-        return mask !== 0n && mask !== fullMask
-    }
-
-    function closeQueryCompositions(): void {
-        let changed = false
-        let pass = 0
-
-        do {
-            changed = false
-            pass++
-
-            const snapshot = [...winners.values()].sort(compareWinnerCost)
-            const queue = new PairQueue()
-
-            for (let i = 0; i < snapshot.length; ++i) {
-                pushPair(queue, {
-                    leftIndex: i,
-                    rightIndex: 0,
-                    lowerBound: queryCompositionLowerBound('and', snapshot[i]!, snapshot[0]!),
-                })
-            }
-
-            for (let item = queue.pop(); item !== undefined; item = queue.pop()) {
-                const targetWinner = winners.get(targetMask)
-                if (targetWinner !== undefined && item.lowerBound > sourceLength(targetWinner.expr)) break
-
-                const left = snapshot[item.leftIndex]!
-                const right = snapshot[item.rightIndex]!
-                for (const family of ['and', 'or', 'xor'] as const) {
-                    const target = queryComposeMask(family, left.mask, right.mask)
-                    const winnerDepth = tryCompose(family, target, left, right)
-                    if (winnerDepth !== 0) changed = true
-                }
-
-                if (item.rightIndex < item.leftIndex) {
-                    const nextRightIndex = item.rightIndex + 1
-                    pushPair(queue, {
-                        leftIndex: item.leftIndex,
-                        rightIndex: nextRightIndex,
-                        lowerBound: queryCompositionLowerBound('and', left, snapshot[nextRightIndex]!),
-                    })
-                }
-            }
-        } while (changed)
-
-        function tryCompose(
-            family: 'and' | 'or' | 'xor',
-            mask: BigMask,
-            left: QueryWinner,
-            right: QueryWinner,
-        ): number {
-            profile.compositionAttempts++
-            if ((!isUsefulIntermediate(mask) && mask !== targetMask) || shouldPruneQueryComposition(family, left, right, mask)) {
-                profile.compositionPruned++
-                return 0
-            }
-
-            profile.compositionConsidered++
-            const [first, second] = orderQueryOperands(left, right)
-            const improved = consider({
-                expr: { type: family, left: first.expr, right: second.expr },
-                mask,
-                source: { family, kind: 'composition', parents: [first.mask, second.mask], iteration: pass },
-            })
-            if (!improved) return 0
-
-            profile.compositionImprovements++
-            return winners.get(mask)!.depth
-        }
-
-        function pushPair(queue: PairQueue, item: PairQueueItem): void {
-            profile.compositionQueuedPairs++
-            queue.push(item)
-        }
-    }
-
-    function shouldPruneQueryComposition(
-        family: 'and' | 'or' | 'xor',
-        left: QueryWinner,
-        right: QueryWinner,
-        mask: BigMask,
-    ): boolean {
-        if (exprCostCompare !== costCode) return false
-
-        const current = winners.get(mask)
-        if (current === undefined) return false
-
-        const lowerBound = queryCompositionLowerBound(family, left, right)
-        return lowerBound > sourceLength(current.expr)
-    }
-
-    function queryCompositionLowerBound(family: 'and' | 'or' | 'xor', left: QueryWinner, right: QueryWinner): number {
-        const operatorLength = family === 'xor' ? ' !== '.length : ' && '.length
-        return sourceLength(left.expr) + operatorLength + sourceLength(right.expr)
-    }
-
-    function queryComposeMask(family: 'and' | 'or' | 'xor', leftMask: BigMask, rightMask: BigMask): BigMask {
-        switch (family) {
-            case 'and':
-                return leftMask & rightMask
-            case 'or':
-                return leftMask | rightMask
-            case 'xor':
-                return leftMask ^ rightMask
-        }
-    }
-
-    function compareWinnerCost(a: QueryWinner, b: QueryWinner): number {
-        return exprCostCompare(a.expr, b.expr)
-    }
-
-    function orderQueryOperands(left: QueryWinner, right: QueryWinner): readonly [QueryWinner, QueryWinner] {
-        if (compareWinnerCost(right, left) < 0) return [right, left]
-        return [left, right]
-    }
-
-    function* bigCandidates(): Generator<BigCandidate> {
+    function* targetCandidates(): Generator<BigCandidate> {
         const m = metrics()
         yield* selfEqualityCandidates()
         yield* lengthCandidates(m.lengths)
@@ -857,7 +983,7 @@ export function solveQuery<const Domain extends string>(
     }
 
     function* selfEqualityCandidates(): Generator<BigCandidate> {
-        for (const value of domain) {
+        for (const value of targetValues) {
             yield {
                 source: { family: 'self.equality', kind: 'primitive' },
                 mask: computeBigMask(domain, s => s === value),
@@ -889,6 +1015,7 @@ export function solveQuery<const Domain extends string>(
     function* charAtCandidates(maxLength: number): Generator<BigCandidate> {
         for (let i = 0; i < maxLength; ++i) {
             const charsHere = groupBy(domain, s => s[i])
+            const charsToTry = new Set(targetValues.map(s => s[i]))
             yield {
                 source: { family: 'charAt.defined', kind: 'primitive' },
                 mask: computeBigMask(domain, s => s[i] !== undefined),
@@ -899,7 +1026,9 @@ export function solveQuery<const Domain extends string>(
                 mask: computeBigMask(domain, s => s[i] === undefined),
                 expr: { feature: { type: 'charAt', args: { n: i }, child: { type: 'not' } } },
             }
-            for (const [char, subdomain] of charsHere) {
+            for (const char of charsToTry) {
+                const subdomain = charsHere.get(char)
+                if (subdomain === undefined) continue
                 yield {
                     source: { family: 'charAt.equality', kind: 'primitive' },
                     mask: computeBigMask(domain, s => subdomain.includes(s)),
@@ -938,6 +1067,7 @@ export function solveQuery<const Domain extends string>(
     function* atCandidates(maxLength: number): Generator<BigCandidate> {
         for (let n = 1; n <= maxLength; ++n) {
             const charsHere = groupBy(domain, s => s.at(-n))
+            const charsToTry = new Set(targetValues.map(s => s.at(-n)))
             yield {
                 source: { family: 'at.defined', kind: 'primitive' },
                 mask: computeBigMask(domain, s => s.at(-n) !== undefined),
@@ -948,7 +1078,9 @@ export function solveQuery<const Domain extends string>(
                 mask: computeBigMask(domain, s => s.at(-n) === undefined),
                 expr: { feature: { type: 'at', args: { '-n': n }, child: { type: 'not' } } },
             }
-            for (const [char, subdomain] of charsHere) {
+            for (const char of charsToTry) {
+                const subdomain = charsHere.get(char)
+                if (subdomain === undefined) continue
                 yield {
                     source: { family: 'at.equality', kind: 'primitive' },
                     mask: computeBigMask(domain, s => subdomain.includes(s)),
@@ -989,7 +1121,7 @@ export function solveQuery<const Domain extends string>(
         const suffixes = new Set<string>()
         const substrings = new Set<string>()
 
-        for (const s of domain) {
+        for (const s of targetValues) {
             for (let length = 1; length < s.length; ++length) {
                 prefixes.add(s.slice(0, length))
                 suffixes.add(s.slice(s.length - length))
@@ -1037,6 +1169,7 @@ export function solveQuery<const Domain extends string>(
     }
 }
 
+
 function compare(left: number, op: ComparisonOp, right: number): boolean
 function compare(left: string | undefined, op: ComparisonOp, right: string): boolean
 function compare(left: number | string | undefined, op: ComparisonOp, right: number | string): boolean {
@@ -1076,6 +1209,12 @@ function exactSubsetExpr(values: readonly string[]): Expr {
 
 function computeBigMask<T>(array: readonly T[], fn: (t: T) => boolean): bigint {
     return array.reduce((cur, item, i) => (fn(item) ? cur | (1n << BigInt(i)) : cur), 0n)
+}
+
+function popcountBig(mask: bigint): number {
+    let count = 0
+    for (let n = mask; n !== 0n; n &= n - 1n) count++
+    return count
 }
 
 function groupBy<T, K>(list: readonly T[], getKey: (item: T) => K) {
@@ -1134,6 +1273,62 @@ class PairQueue {
                 smallest = left
             }
             if (right < this.#items.length && this.#items[right]!.lowerBound < this.#items[smallest]!.lowerBound) {
+                smallest = right
+            }
+            if (smallest === index) break
+
+            this.#swap(index, smallest)
+            index = smallest
+        }
+    }
+
+    #swap(left: number, right: number): void {
+        const temporary = this.#items[left]!
+        this.#items[left] = this.#items[right]!
+        this.#items[right] = temporary
+    }
+}
+
+class QueryQueue {
+    #items: QuerySearchResult[] = []
+
+    push(item: QuerySearchResult): void {
+        this.#items.push(item)
+        this.#bubbleUp(this.#items.length - 1)
+    }
+
+    pop(): QuerySearchResult | undefined {
+        const first = this.#items[0]
+        const last = this.#items.pop()
+        if (first === undefined || last === undefined) return undefined
+
+        if (this.#items.length > 0) {
+            this.#items[0] = last
+            this.#bubbleDown(0)
+        }
+
+        return first
+    }
+
+    #bubbleUp(index: number): void {
+        while (index > 0) {
+            const parent = (index - 1) >> 1
+            if (this.#items[parent]!.cost <= this.#items[index]!.cost) break
+            this.#swap(index, parent)
+            index = parent
+        }
+    }
+
+    #bubbleDown(index: number): void {
+        for (;;) {
+            const left = index * 2 + 1
+            const right = left + 1
+            let smallest = index
+
+            if (left < this.#items.length && this.#items[left]!.cost < this.#items[smallest]!.cost) {
+                smallest = left
+            }
+            if (right < this.#items.length && this.#items[right]!.cost < this.#items[smallest]!.cost) {
                 smallest = right
             }
             if (smallest === index) break

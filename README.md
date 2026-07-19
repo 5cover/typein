@@ -102,7 +102,9 @@ Useful options:
 
 `typein all` uses numeric bit operations for exhaustive enumeration, so domains must contain at most 30 strings. `typein for` uses a large-domain-safe query solver and does not have that numeric mask limit.
 
-Builtin domains are intended both as examples and stress inputs. Use `typein for` for larger domains; `typein all` is intentionally exhaustive and can still be expensive.
+Builtin domains are intended both as examples and stress inputs. Use `typein for` for larger domains; `typein all` is intentionally exhaustive and can still be expensive. The full `css-properties` builtin contains the known CSS properties list; sliced variants such as `css-properties-50`, `css-properties-100`, `css-properties-250`, `css-properties-500`, and `css-properties-1000` are available for profiling.
+
+For large query domains, `--profile` distinguishes exact correctness from search proof scope. `proof: query-normal-forms` means the target normal-form searches were exhausted. `proof: bounded-query-normal-forms` means the emitted guard was verified over the full domain, but the normal-form optimality search used a bounded frontier.
 
 `--report` includes two coverage tables. In the family table:
 

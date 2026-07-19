@@ -5,6 +5,11 @@ export const builtinDomains = {
     'http-methods': ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'CONNECT', 'OPTIONS', 'TRACE', 'PATCH'],
     weekdays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
     'css-properties': all,
+    'css-properties-50': all.slice(0, 50),
+    'css-properties-100': all.slice(0, 100),
+    'css-properties-250': all.slice(0, 250),
+    'css-properties-500': all.slice(0, 500),
+    'css-properties-1000': all.slice(0, 1000),
     months: [
         'January',
         'February',
