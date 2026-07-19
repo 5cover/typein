@@ -34,6 +34,30 @@ export function tsModule<S extends string>(
     return printStatements(statements)
 }
 
+export function tsGuardModule<S extends string>(
+    S: readonly S[],
+    targetValues: readonly S[],
+    expr: Expr,
+    typeName: string,
+    parameterName = 's',
+): string {
+    const sortedDomain = [...S].sort()
+    const sortedTarget = [...targetValues].sort()
+    const statements: tsc.Statement[] = [
+        createExportedTypeAlias(typeName, sortedDomain),
+        f.createExportDefault(
+            createTypeGuard({
+                typeName,
+                parameterName,
+                narrowedValues: sortedTarget,
+                body: compile.expr2ts(expr, parameterName),
+            }),
+        ),
+    ]
+
+    return printStatements(statements)
+}
+
 function registryTree<S extends string>(S: readonly S[], best: Map<Mask, Expr>): RegistryNode {
     const root: RegistryNode = { children: new Map() }
     const entries = [...best.entries()]

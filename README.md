@@ -51,11 +51,26 @@ These string values will be refered to as "typestrings" from now on.
 ## CLI
 
 ```sh
-typein [DOMAIN...]
+typein for <TARGET_VALUE...> [common options]
+typein all [common options] [--guard-key <name>]
 ```
 
-When `DOMAIN` is omitted, `typein` uses the JavaScript `typeof` strings. Generated TypeScript is written to stdout.
-The generated module default-exports a nested registry object. Each path is an alphabetically sorted subset of domain strings, and each node's `is` property is the type guard for that subset.
+When no domain source is provided, `typein` uses the JavaScript `typeof` strings. Generated TypeScript is written to stdout.
+
+`typein for` is the default operating style: provide the desired subset as command arguments and it emits one default-exported type guard for that partition.
+
+```sh
+typein for string number
+typein for color display -b css-properties
+typein for urgent -d debug -d info -d urgent
+```
+
+```ts
+export type Domain = "bigint" | "boolean" | "function" | "number" | "object" | "string" | "symbol" | "undefined"
+export default (s: Domain): s is "number" | "string" => s[0] > "m" && s[0] < "t"
+```
+
+`typein all` opts into exhaustive enumeration. The generated module default-exports a nested registry object. Each path is an alphabetically sorted subset of domain strings, and each node's `is` property is the type guard for that subset.
 
 ```ts
 import is from './generated.js'
@@ -76,17 +91,18 @@ Useful options:
 - `--report`: write coverage and interest-score reporting to stderr.
 - `--profile`: write timing and composition-search counters to stderr.
 - `--test`: verify every generated expression against its promised mask for the input domain.
-- `-b, --builtin name`: add strings from a builtin domain. Can be repeated and can be combined with positional domain strings.
+- `-b, --builtin name`: add strings from a builtin domain. Can be repeated and can be combined with `--domain`.
+- `-d, --domain value`: add one string to the input domain. Can be repeated and can be combined with builtins.
 - `--list-builtins`: list builtin domain names.
 - `--language ts`: select TypeScript output. This is the only output language for now.
 - `--cost source`: select the source-size comparator. This is the only cost comparator for now.
 - `--type-name Name`: change the generated union type name.
 - `--parameter-name name`: change the generated predicate parameter name.
-- `--guard-key name`: change the registry leaf key for type guards. Defaults to `is`.
+- `--guard-key name`: change the registry leaf key for `typein all`. Defaults to `is`.
 
-The current mask implementation uses numeric bit operations, so CLI domains must contain unique values and at most 30 strings.
+`typein all` uses numeric bit operations for exhaustive enumeration, so domains must contain at most 30 strings. `typein for` uses a large-domain-safe query solver and does not have that numeric mask limit.
 
-Builtin domains are intended both as examples and stress inputs. Some larger or stranger builtins can be slow with the current exhaustive composition closure.
+Builtin domains are intended both as examples and stress inputs. Use `typein for` for larger domains; `typein all` is intentionally exhaustive and can still be expensive.
 
 `--report` includes two coverage tables. In the family table:
 

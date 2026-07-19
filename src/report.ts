@@ -1,5 +1,5 @@
 import { maskToNames } from './mask.js'
-import type { FamilyKind, SolveResult } from './solve.js'
+import type { FamilyKind, QueryResult, SolveResult } from './solve.js'
 import type { Mask } from './types.js'
 import { costCodeValue, printExpression } from './cost.js'
 
@@ -103,6 +103,53 @@ export function profileReport(result: SolveResult, cli: CliProfile): string {
                 ['materialized', solve.compositionConsidered.toString()],
                 ['improvements', solve.compositionImprovements.toString()],
                 ['queued pairs', solve.compositionQueuedPairs.toString()],
+            ],
+        ),
+    ].join('\n')
+}
+
+export function queryReport(domain: readonly string[], result: QueryResult): string {
+    return [
+        '## Query',
+        markdownTable(
+            ['field', 'value'],
+            [
+                ['domain values', domain.length.toString()],
+                ['target values', result.targetValues.length.toString()],
+                ['target found', result.profile.targetFound ? 'yes' : 'no'],
+                ['expression', code(printExpression(result.expr, 's'))],
+            ],
+        ),
+    ].join('\n')
+}
+
+export function queryProfileReport(result: QueryResult, cli: CliProfile): string {
+    const solve = result.profile
+    return [
+        '## Profile',
+        markdownTable(
+            ['phase', 'ms'],
+            [
+                ['solve primitives+complements', formatNumber(solve.primitiveMs)],
+                ['solve composition', formatNumber(solve.compositionMs)],
+                ['solve finalization', formatNumber(solve.finalizeMs)],
+                ['solve total', formatNumber(cli.solveMs)],
+                ['report', formatNumber(cli.reportMs)],
+                ['verify', formatNumber(cli.verifyMs)],
+                ['emit', formatNumber(cli.emitMs)],
+                ['total', formatNumber(cli.totalMs)],
+            ],
+        ),
+        '## Composition Counters',
+        markdownTable(
+            ['counter', 'count'],
+            [
+                ['target candidates', solve.compositionAttempts.toString()],
+                ['lower-bound skips', solve.compositionPruned.toString()],
+                ['materialized', solve.compositionConsidered.toString()],
+                ['improvements', solve.compositionImprovements.toString()],
+                ['queued pairs', solve.compositionQueuedPairs.toString()],
+                ['target found', solve.targetFound ? 'yes' : 'no'],
             ],
         ),
     ].join('\n')

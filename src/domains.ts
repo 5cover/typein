@@ -46,6 +46,7 @@ export const builtinDomains = {
         'text/css',
         'text/csv',
         'text/html',
+        'text/javascript',
         'text/plain',
     ],
     weird: ['', ' ', '\t', '\n', 'A', 'a', 'ß', 'İ', 'é', 'e\u0301', '👩‍💻', '🏳️‍🌈'],

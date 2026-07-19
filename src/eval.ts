@@ -42,6 +42,21 @@ export function verifyResult(domain: readonly string[], result: SolveResult): Ve
     return failures
 }
 
+export type QueryVerificationFailure = {
+    expected: string[]
+    actual: string[]
+}
+
+export function verifyQuery(domain: readonly string[], targetValues: readonly string[], expr: Expr): QueryVerificationFailure | undefined {
+    const targetValueSet = new Set(targetValues)
+    const expected = domain.filter(value => targetValueSet.has(value))
+    const actual = domain.filter(value => evalExpr(expr, value))
+
+    if (expected.length === actual.length && expected.every((value, i) => value === actual[i])) return undefined
+
+    return { expected, actual }
+}
+
 function evalFeature(parent: unknown, feat: Feature): unknown {
     const current = evalFeatureLevel(parent, feat)
     return feat.child ? evalFeature(current, feat.child) : current
