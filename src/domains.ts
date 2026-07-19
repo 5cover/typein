@@ -1,7 +1,10 @@
+import { all } from 'known-css-properties'
+
 export const builtinDomains = {
     typeof: ['bigint', 'boolean', 'function', 'number', 'object', 'string', 'symbol', 'undefined'],
     'http-methods': ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'CONNECT', 'OPTIONS', 'TRACE', 'PATCH'],
     weekdays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+    'css-properties': all,
     months: [
         'January',
         'February',
@@ -17,7 +20,7 @@ export const builtinDomains = {
         'December',
     ],
     'json-token-types': ['brace-open', 'brace-close', 'bracket-open', 'bracket-close', 'colon', 'comma', 'string', 'number', 'true', 'false', 'null'],
-    'css-properties': [
+    'some-css-properties': [
         'color',
         'display',
         'position',
