@@ -3,7 +3,7 @@
 import { Command, InvalidArgumentError, Option, type OptionValues } from '@commander-js/extra-typings'
 import * as emit from './emit.js'
 import { defaultQueryLimits, solve, solveQuery, type QueryLimits } from './solve.js'
-import { costComparators } from './cost.js'
+import { costComparators, printExpression, sourceLength } from './cost.js'
 import { coverageReport, interestReport, profileReport, queryProfileReport, queryReport } from './report.js'
 import { verifyQuery, verifyResult } from './eval.js'
 import { builtinDomainNames, builtinDomains, type BuiltinDomainName } from './domains.js'
@@ -35,8 +35,19 @@ const forCommand = addQueryOptions(
     runFor(targetValues, opts as unknown as CommonOptions & QueryOptionValues)
 })
 
+const benchCssQueryCommand = addQueryOptions(
+    new Command('bench-css-query')
+        .description('run the CSS query benchmark ladder')
+        .option('--report', 'write per-run query family reporting to stderr')
+        .option('--profile', 'write per-run timing and search profile to stderr')
+        .option('--test', 'verify each synthesized expression against the CSS property domain'),
+).action(opts => {
+    runBenchCssQuery(opts as unknown as BenchOptions & QueryOptionValues)
+})
+
 program.addCommand(allCommand)
 program.addCommand(forCommand)
+program.addCommand(benchCssQueryCommand)
 
 program.parse()
 
@@ -220,6 +231,76 @@ function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOpti
     }
 }
 
+function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
+    const domain = builtinDomains['css-properties']
+    const baseLimits = queryLimitsFromOptions(opts)
+    const rows: string[][] = []
+
+    for (const benchmark of cssQueryBenchmarks) {
+        let limits = baseLimits
+
+        for (;;) {
+            const totalStart = performance.now()
+            const solveStart = performance.now()
+            const result = solveQuery(domain, benchmark.targets, costComparators.source, limits)
+            const solveMs = performance.now() - solveStart
+            const totalMs = performance.now() - totalStart
+            const fallbackCost = fallbackSourceLength(benchmark.targets)
+            const resultCost = sourceLength(result.expr)
+            const improved = resultCost < fallbackCost
+
+            if (opts.report) process.stderr.write(`\n# ${benchmark.name}\n${queryReport(domain, result)}\n`)
+            if (opts.profile) {
+                process.stderr.write(
+                    `${queryProfileReport(result, {
+                        totalMs,
+                        solveMs,
+                        reportMs: 0,
+                        verifyMs: 0,
+                        emitMs: 0,
+                    })}\n`,
+                )
+            }
+
+            if (opts.test) {
+                const failure = verifyQuery(domain, benchmark.targets, result.expr)
+                if (failure !== undefined) {
+                    process.stderr.write(
+                        [
+                            `benchmark "${benchmark.name}" verified incorrectly`,
+                            `  expected: ${failure.expected.join(', ')}`,
+                            `  actual:   ${failure.actual.join(', ')}`,
+                        ].join('\n') + '\n',
+                    )
+                    process.exitCode = 1
+                }
+            }
+
+            rows.push([
+                benchmark.name,
+                benchmark.targets.length.toString(),
+                limitsLabel(limits),
+                formatMs(totalMs),
+                improved ? 'yes' : 'no',
+                result.profile.proof,
+                result.profile.orStateLimitHit || result.profile.andStateLimitHit ? 'yes' : 'no',
+                code(printExpression(result.expr, 's')),
+            ])
+
+            if (improved || totalMs > 10_000) break
+            limits = doubleQueryLimits(limits)
+        }
+    }
+
+    process.stderr.write(
+        [
+            '## CSS Query Benchmark',
+            markdownTable(['query', 'targets', 'limits', 'ms', 'improved', 'proof', 'limit hit', 'expression'], rows),
+            '',
+        ].join('\n'),
+    )
+}
+
 type CommonOptions = {
     builtin?: BuiltinDomainName[]
     domain?: string[]
@@ -281,4 +362,96 @@ function validateQuery(domain: readonly string[], targetValues: readonly string[
 
 function unique<T>(values: readonly T[]): T[] {
     return [...new Set(values)]
+}
+
+type BenchOptions = {
+    report?: boolean
+    profile?: boolean
+    test?: boolean
+}
+
+const cssQueryBenchmarks = [
+    {
+        name: 'margin pair',
+        targets: ['margin', 'margin-top'],
+    },
+    {
+        name: 'margin box',
+        targets: ['margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left'],
+    },
+    {
+        name: 'border color',
+        targets: ['border-color', 'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color'],
+    },
+    {
+        name: 'inline margin padding',
+        targets: ['margin-inline', 'margin-inline-start', 'margin-inline-end', 'padding-inline', 'padding-inline-start', 'padding-inline-end'],
+    },
+    {
+        name: 'wide scatter',
+        targets: [
+            'accent-color',
+            'align-content',
+            'backdrop-filter',
+            'border-image-source',
+            'caret-color',
+            'clip-path',
+            'color-scheme',
+            'column-rule-width',
+            'contain-intrinsic-size',
+            'counter-reset',
+            'font-variation-settings',
+            'grid-template-areas',
+            'hyphenate-character',
+            'image-rendering',
+            'inset-inline-start',
+            'mask-composite',
+            'mix-blend-mode',
+            'offset-rotate',
+            'overflow-anchor',
+            'perspective-origin',
+            'scroll-snap-type',
+            'shape-outside',
+            'text-decoration-skip-ink',
+            'view-transition-name',
+        ],
+    },
+] as const
+
+function fallbackSourceLength(targets: readonly string[]): number {
+    return targets.map(target => `x === ${JSON.stringify(target)}`).join(' || ').length
+}
+
+function doubleQueryLimits(limits: QueryLimits): QueryLimits {
+    return {
+        orStates: limits.orStates * 2,
+        andStates: limits.andStates * 2,
+        supersetPreFrontier: limits.supersetPreFrontier * 2,
+        supersetFrontier: limits.supersetFrontier * 2,
+        dnfFrontier: limits.dnfFrontier * 2,
+    }
+}
+
+function limitsLabel(limits: QueryLimits): string {
+    return [limits.orStates, limits.andStates, limits.supersetPreFrontier, limits.supersetFrontier, limits.dnfFrontier].join('/')
+}
+
+function formatMs(value: number): string {
+    return value.toFixed(1)
+}
+
+function markdownTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
+    return [
+        `| ${headers.join(' | ')} |`,
+        `| ${headers.map(() => '---').join(' | ')} |`,
+        ...rows.map(row => `| ${row.map(escapeMarkdownCell).join(' | ')} |`),
+    ].join('\n')
+}
+
+function escapeMarkdownCell(value: string): string {
+    return value.replaceAll('|', '\\|').replaceAll('\n', '<br>')
+}
+
+function code(value: string): string {
+    return `\`${value.replaceAll('`', '\\`')}\``
 }
