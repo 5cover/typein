@@ -16,6 +16,7 @@ type FeatureString =
     | FeatureLiteral<string>
     | BinaryPredicates<'string'>
     | F<'length', 'number'>
+    | F<'splitLength', 'number', { sep: string }>
     | F<'at', 'char' | 'undefined', { '-n': number }>
     | F<'charAt', 'char' | 'undefined', { n: number }>
     | F<'charCodeAt', 'number', { n: number }>

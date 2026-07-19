@@ -23,6 +23,12 @@ export type FamilyId =
     | 'startsWith'
     | 'endsWith'
     | 'includes'
+    | 'delimiter.presence'
+    | 'token.count'
+    | 'token.first'
+    | 'token.last'
+    | 'token.middle'
+    | 'token.any'
     | 'not'
     | 'and'
     | 'or'
@@ -217,6 +223,12 @@ export function solve<const Domain extends string>(
             case 'startsWith':
             case 'endsWith':
             case 'includes':
+            case 'delimiter.presence':
+            case 'token.count':
+            case 'token.first':
+            case 'token.last':
+            case 'token.middle':
+            case 'token.any':
             case 'not':
             case 'and':
             case 'or':
@@ -1055,11 +1067,18 @@ export function solveQuery<const Domain extends string>(
             case 'startsWith':
             case 'endsWith':
             case 'includes':
+            case 'delimiter.presence':
+            case 'token.first':
+            case 'token.last':
+            case 'token.middle':
+            case 'token.any':
             case 'not':
             case 'and':
             case 'or':
             case 'xor':
                 return false
+            case 'token.count':
+                return true
         }
     }
 
@@ -1070,6 +1089,7 @@ export function solveQuery<const Domain extends string>(
         yield* charAtCandidates(m.maxLength)
         yield* atCandidates(m.maxLength)
         yield* stringMembershipCandidates()
+        yield* hyphenTokenCandidates()
     }
 
     function* selfEqualityCandidates(): Generator<BigCandidate> {
@@ -1248,6 +1268,79 @@ export function solveQuery<const Domain extends string>(
         }
     }
 
+    function* hyphenTokenCandidates(): Generator<BigCandidate> {
+        const separator = '-'
+        if (!domain.some(s => s.includes(separator)) && !targetValues.some(s => s.includes(separator))) return
+
+        const targetTokens = new Set(targetValues.flatMap(s => splitTokens(s, separator)))
+        const targetFirstTokens = new Set(targetValues.filter(s => s.includes(separator)).map(s => splitTokens(s, separator)[0]!))
+        const targetLastTokens = new Set(targetValues.filter(s => s.includes(separator)).map(s => splitTokens(s, separator).at(-1)!))
+        const targetMiddleTokens = new Set(targetValues.flatMap(s => splitTokens(s, separator).slice(1, -1)))
+        const tokenCounts = [...new Set(domain.map(s => splitTokens(s, separator).length))].sort((a, b) => a - b)
+
+        yield {
+            source: { family: 'delimiter.presence', kind: 'primitive' },
+            mask: computeBigMask(domain, s => s.includes(separator)),
+            expr: { feature: { type: 'includes', args: { value: separator } } },
+        }
+        yield {
+            source: { family: 'delimiter.presence', kind: 'primitive' },
+            mask: computeBigMask(domain, s => !s.includes(separator)),
+            expr: notExpr({ feature: { type: 'includes', args: { value: separator } } }),
+        }
+
+        for (const count of tokenCounts) {
+            for (const op of ['<', '<=', '>', '>=', '='] as const) {
+                yield {
+                    source: { family: 'token.count', kind: 'primitive' },
+                    mask: computeBigMask(domain, s => compare(splitTokens(s, separator).length, op, count)),
+                    expr: {
+                        feature: {
+                            type: 'splitLength',
+                            args: { sep: separator },
+                            child: {
+                                type: op,
+                                args: { type: 'lit', args: count },
+                            },
+                        },
+                    },
+                }
+            }
+        }
+
+        for (const token of targetFirstTokens) {
+            yield {
+                source: { family: 'token.first', kind: 'primitive' },
+                mask: computeBigMask(domain, s => firstToken(s, separator) === token && s.includes(separator)),
+                expr: { feature: { type: 'startsWith', args: { s: `${token}${separator}` } } },
+            }
+        }
+
+        for (const token of targetLastTokens) {
+            yield {
+                source: { family: 'token.last', kind: 'primitive' },
+                mask: computeBigMask(domain, s => lastToken(s, separator) === token && s.includes(separator)),
+                expr: { feature: { type: 'endsWith', args: { s: `${separator}${token}` } } },
+            }
+        }
+
+        for (const token of targetMiddleTokens) {
+            yield {
+                source: { family: 'token.middle', kind: 'primitive' },
+                mask: computeBigMask(domain, s => splitTokens(s, separator).slice(1, -1).includes(token)),
+                expr: { feature: { type: 'includes', args: { value: `${separator}${token}${separator}` } } },
+            }
+        }
+
+        for (const token of targetTokens) {
+            yield {
+                source: { family: 'token.any', kind: 'primitive' },
+                mask: computeBigMask(domain, s => splitTokens(s, separator).includes(token)),
+                expr: tokenAnyExpr(token, separator),
+            }
+        }
+    }
+
     function metrics() {
         let maxLength = 0
         const lengths = new Set<number>()
@@ -1295,6 +1388,33 @@ function exactSubsetExpr(values: readonly string[]): Expr {
     if (first === undefined) throw new Error('cannot build a guard for an empty target subset')
 
     return rest.reduce<Expr>((expr, value) => ({ type: 'or', left: expr, right: selfEqualityExpr(value) }), selfEqualityExpr(first))
+}
+
+function tokenAnyExpr(token: string, separator: string): Expr {
+    return orExpr([
+        selfEqualityExpr(token),
+        { feature: { type: 'startsWith', args: { s: `${token}${separator}` } } },
+        { feature: { type: 'endsWith', args: { s: `${separator}${token}` } } },
+        { feature: { type: 'includes', args: { value: `${separator}${token}${separator}` } } },
+    ])
+}
+
+function orExpr(expressions: readonly Expr[]): Expr {
+    const [first, ...rest] = expressions
+    if (first === undefined) throw new Error('cannot build an OR expression with no terms')
+    return rest.reduce<Expr>((left, right) => ({ type: 'or', left, right }), first)
+}
+
+function splitTokens(value: string, separator: string): string[] {
+    return value.split(separator)
+}
+
+function firstToken(value: string, separator: string): string {
+    return splitTokens(value, separator)[0]!
+}
+
+function lastToken(value: string, separator: string): string {
+    return splitTokens(value, separator).at(-1)!
 }
 
 function computeBigMask<T>(array: readonly T[], fn: (t: T) => boolean): bigint {

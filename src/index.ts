@@ -49,8 +49,6 @@ program.addCommand(allCommand)
 program.addCommand(forCommand)
 program.addCommand(benchCssQueryCommand)
 
-program.parse()
-
 function addCommonOptions<Args extends any[], Opts extends OptionValues, GlobalOpts extends OptionValues>(
     command: Command<Args, Opts, GlobalOpts>,
 ) {
@@ -455,3 +453,5 @@ function escapeMarkdownCell(value: string): string {
 function code(value: string): string {
     return `\`${value.replaceAll('`', '\\`')}\``
 }
+
+program.parse()

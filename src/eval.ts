@@ -68,6 +68,8 @@ function evalFeatureLevel(parent: unknown, feat: Feature): unknown {
             return parent
         case 'length':
             return String(parent).length
+        case 'splitLength':
+            return String(parent).split(feat.args.sep).length
         case 'charAt':
             return String(parent)[feat.args.n]
         case 'at':

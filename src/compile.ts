@@ -34,6 +34,13 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
             return parent
         case 'length':
             return f.createPropertyAccessExpression(parent, 'length')
+        case 'splitLength':
+            return f.createPropertyAccessExpression(
+                f.createCallExpression(f.createPropertyAccessExpression(parent, 'split'), undefined, [
+                    f.createStringLiteral(feat.args.sep),
+                ]),
+                'length',
+            )
         case 'charAt':
             return f.createElementAccessExpression(parent, f.createNumericLiteral(feat.args.n))
         case 'at':
