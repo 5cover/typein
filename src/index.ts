@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { Command, Option, type OptionValues } from '@commander-js/extra-typings'
+import { Command, InvalidArgumentError, Option, type OptionValues } from '@commander-js/extra-typings'
 import * as emit from './emit.js'
-import { solve, solveQuery } from './solve.js'
+import { defaultQueryLimits, solve, solveQuery, type QueryLimits } from './solve.js'
 import { costComparators } from './cost.js'
 import { coverageReport, interestReport, profileReport, queryProfileReport, queryReport } from './report.js'
 import { verifyQuery, verifyResult } from './eval.js'
@@ -29,10 +29,10 @@ const allCommand = addCommonOptions(
     runAll(opts as unknown as CommonOptions & { guardKey: string })
 })
 
-const forCommand = addCommonOptions(
-    new Command('for').description('emit a guard for one target partition').argument('<targetValues...>'),
+const forCommand = addQueryOptions(
+    addCommonOptions(new Command('for').description('emit a guard for one target partition').argument('<targetValues...>')),
 ).action((targetValues, opts) => {
-    runFor(targetValues, opts as unknown as CommonOptions)
+    runFor(targetValues, opts as unknown as CommonOptions & QueryOptionValues)
 })
 
 program.addCommand(allCommand)
@@ -66,8 +66,30 @@ function builtinOption(): Option {
         .argParser((name, previous: BuiltinDomainName[] = []) => [...previous, name as BuiltinDomainName])
 }
 
+function addQueryOptions<Args extends any[], Opts extends OptionValues, GlobalOpts extends OptionValues>(
+    command: Command<Args, Opts, GlobalOpts>,
+) {
+    return command
+        .option('--query-or-states <count>', 'maximum OR-cover states to visit', parsePositiveInteger, defaultQueryLimits.orStates)
+        .option('--query-and-states <count>', 'maximum AND-filter states to visit', parsePositiveInteger, defaultQueryLimits.andStates)
+        .option(
+            '--query-superset-pre-frontier <count>',
+            'maximum superset atoms before dominance reduction',
+            parsePositiveInteger,
+            defaultQueryLimits.supersetPreFrontier,
+        )
+        .option('--query-superset-frontier <count>', 'maximum superset atoms after dominance reduction', parsePositiveInteger, defaultQueryLimits.supersetFrontier)
+        .option('--query-dnf-frontier <count>', 'maximum superset atoms used for pairwise DNF terms', parsePositiveInteger, defaultQueryLimits.dnfFrontier)
+}
+
 function collect(value: string, previous: string[] = []): string[] {
     return [...previous, value]
+}
+
+function parsePositiveInteger(value: string): number {
+    const parsed = Number(value)
+    if (!Number.isSafeInteger(parsed) || parsed < 1) throw new InvalidArgumentError(`expected a positive integer, got "${value}"`)
+    return parsed
 }
 
 function listBuiltins(): never {
@@ -138,7 +160,7 @@ function runAll(opts: CommonOptions & { guardKey: string }) {
     }
 }
 
-function runFor(targetValues: readonly string[], opts: CommonOptions) {
+function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOptionValues) {
     if (opts.listBuiltins) listBuiltins()
 
     const domain = resolveDomain(opts.builtin ?? [], opts.domain ?? [])
@@ -147,7 +169,7 @@ function runFor(targetValues: readonly string[], opts: CommonOptions) {
 
     const totalStart = performance.now()
     const solveStart = performance.now()
-    const result = solveQuery(domain, targets, costComparators[opts.cost])
+    const result = solveQuery(domain, targets, costComparators[opts.cost], queryLimitsFromOptions(opts))
     const solveMs = performance.now() - solveStart
 
     let reportMs = 0
@@ -209,6 +231,24 @@ type CommonOptions = {
     test?: boolean
     typeName: string
     parameterName: string
+}
+
+type QueryOptionValues = {
+    queryOrStates: number
+    queryAndStates: number
+    querySupersetPreFrontier: number
+    querySupersetFrontier: number
+    queryDnfFrontier: number
+}
+
+function queryLimitsFromOptions(opts: QueryOptionValues): QueryLimits {
+    return {
+        orStates: opts.queryOrStates,
+        andStates: opts.queryAndStates,
+        supersetPreFrontier: opts.querySupersetPreFrontier,
+        supersetFrontier: opts.querySupersetFrontier,
+        dnfFrontier: opts.queryDnfFrontier,
+    }
 }
 
 function resolveDomain(builtins: readonly BuiltinDomainName[], explicitValues: readonly string[]): string[] {

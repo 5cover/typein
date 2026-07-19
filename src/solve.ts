@@ -97,6 +97,7 @@ export type QueryProfile = SolveProfile & {
     frontierKept: number
     dnfTermsAttempted: number
     proof: 'query-normal-forms' | 'bounded-query-normal-forms'
+    limits: QueryLimits
 }
 
 export type QueryResult = {
@@ -104,6 +105,22 @@ export type QueryResult = {
     profile: QueryProfile
     targetValues: readonly string[]
     familyStats: Map<FamilyId, QueryFamilyStats>
+}
+
+export type QueryLimits = {
+    orStates: number
+    andStates: number
+    supersetPreFrontier: number
+    supersetFrontier: number
+    dnfFrontier: number
+}
+
+export const defaultQueryLimits: QueryLimits = {
+    orStates: 200,
+    andStates: 200,
+    supersetPreFrontier: 512,
+    supersetFrontier: 64,
+    dnfFrontier: 32,
 }
 
 export type QueryFamilyStats = {
@@ -667,7 +684,9 @@ export function solveQuery<const Domain extends string>(
     domain: readonly Domain[],
     targetValues: readonly Domain[],
     exprCostCompare: (a: Expr, b: Expr) => number,
+    queryLimits: QueryLimits = defaultQueryLimits,
 ): QueryResult {
+    const limits = normalizeQueryLimits(queryLimits)
     const fullMask = (1n << BigInt(domain.length)) - 1n
     const targetValueSet = new Set(targetValues)
     const targetMask = computeBigMask(domain, s => targetValueSet.has(s))
@@ -695,6 +714,7 @@ export function solveQuery<const Domain extends string>(
         frontierKept: 0,
         dnfTermsAttempted: 0,
         proof: 'query-normal-forms',
+        limits,
     }
     const fallback = exactSubsetExpr(targetValues)
     let best = fallback
@@ -712,11 +732,14 @@ export function solveQuery<const Domain extends string>(
     const orResult = searchOrCover(reduceSubsetAtoms([...subsetAtoms.values()]), bestCost)
     if (orResult !== undefined) improve(orResult.expr)
 
-    const reducedSupersetAtoms = queryFrontier(reduceSupersetAtoms(queryFrontier([...supersetAtoms.values()], 512)), 64)
+    const reducedSupersetAtoms = queryFrontier(
+        reduceSupersetAtoms(queryFrontier([...supersetAtoms.values()], limits.supersetPreFrontier)),
+        limits.supersetFrontier,
+    )
     const andResult = searchAndFilter(reducedSupersetAtoms, bestCost)
     if (andResult !== undefined) improve(andResult.expr)
 
-    const dnfAtoms = pairwiseAndTerms(queryFrontier(reducedSupersetAtoms, 32), bestCost)
+    const dnfAtoms = pairwiseAndTerms(queryFrontier(reducedSupersetAtoms, limits.dnfFrontier), bestCost)
     if (dnfAtoms.length > 0) {
         const dnfResult = searchOrCover(reduceSubsetAtoms([...subsetAtoms.values(), ...dnfAtoms]), bestCost)
         if (dnfResult !== undefined) improve(dnfResult.expr)
@@ -852,7 +875,7 @@ export function solveQuery<const Domain extends string>(
             if (state.cost >= bound) continue
 
             profile.orStates++
-            if (profile.orStates > 200) {
+            if (profile.orStates > limits.orStates) {
                 proof = 'bounded-query-normal-forms'
                 profile.orStateLimitHit = true
                 return undefined
@@ -907,7 +930,7 @@ export function solveQuery<const Domain extends string>(
             if (state.cost >= bound) continue
 
             profile.andStates++
-            if (profile.andStates > 200) {
+            if (profile.andStates > limits.andStates) {
                 proof = 'bounded-query-normal-forms'
                 profile.andStateLimitHit = true
                 return undefined
@@ -1282,6 +1305,21 @@ function popcountBig(mask: bigint): number {
     let count = 0
     for (let n = mask; n !== 0n; n &= n - 1n) count++
     return count
+}
+
+function normalizeQueryLimits(limits: QueryLimits): QueryLimits {
+    return {
+        orStates: positiveInteger(limits.orStates, 'orStates'),
+        andStates: positiveInteger(limits.andStates, 'andStates'),
+        supersetPreFrontier: positiveInteger(limits.supersetPreFrontier, 'supersetPreFrontier'),
+        supersetFrontier: positiveInteger(limits.supersetFrontier, 'supersetFrontier'),
+        dnfFrontier: positiveInteger(limits.dnfFrontier, 'dnfFrontier'),
+    }
+}
+
+function positiveInteger(value: number, name: string): number {
+    if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`)
+    return value
 }
 
 function groupBy<T, K>(list: readonly T[], getKey: (item: T) => K) {

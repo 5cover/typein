@@ -106,6 +106,14 @@ Builtin domains are intended both as examples and stress inputs. Use `typein for
 
 For large query domains, `--profile` distinguishes exact correctness from search proof scope. `proof: query-normal-forms` means the target normal-form searches were exhausted. `proof: bounded-query-normal-forms` means the emitted guard was verified over the full domain, but the normal-form optimality search used a bounded frontier.
 
+`typein for` exposes query search limits when you want to spend more time trying to beat the exact-value fallback:
+
+- `--query-or-states count`
+- `--query-and-states count`
+- `--query-superset-pre-frontier count`
+- `--query-superset-frontier count`
+- `--query-dnf-frontier count`
+
 `--report` includes two coverage tables. In the family table:
 
 - `candidates`: candidate expressions considered for that family, including candidates for empty/full masks.
