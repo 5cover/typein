@@ -82,6 +82,8 @@ function evalFeatureLevel(parent: unknown, feat: Feature): unknown {
             return String(parent).endsWith(feat.args.s)
         case 'includes':
             return String(parent).includes(feat.args.value)
+        case 'regexTest':
+            return new RegExp(feat.args.source).test(String(parent))
         case '<':
             return compare(parent, '<', evalFeature(parent, feat.args))
         case '<=':

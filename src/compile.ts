@@ -61,6 +61,12 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
             return f.createCallExpression(f.createPropertyAccessExpression(parent, 'includes'), undefined, [
                 f.createStringLiteral(feat.args.value),
             ])
+        case 'regexTest':
+            return f.createCallExpression(
+                f.createPropertyAccessExpression(f.createRegularExpressionLiteral(`/${feat.args.source.replaceAll('/', '\\/')}/`), 'test'),
+                undefined,
+                [parent],
+            )
         case '<':
             return f.createLessThan(parent, featureToExpression(parent, feat.args))
         case '<=':

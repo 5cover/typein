@@ -23,6 +23,7 @@ type FeatureString =
     | F<'startsWith', 'boolean', { s: string }>
     | F<'endsWith', 'boolean', { s: string }>
     | F<'includes', 'boolean', { value: string }>
+    | F<'regexTest', 'boolean', { source: string }>
 
 type FeatureChar = FeatureLiteral<string>
 

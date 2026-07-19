@@ -29,6 +29,7 @@ export type FamilyId =
     | 'token.last'
     | 'token.middle'
     | 'token.any'
+    | 'token.pattern'
     | 'not'
     | 'and'
     | 'or'
@@ -229,6 +230,7 @@ export function solve<const Domain extends string>(
             case 'token.last':
             case 'token.middle':
             case 'token.any':
+            case 'token.pattern':
             case 'not':
             case 'and':
             case 'or':
@@ -1072,6 +1074,7 @@ export function solveQuery<const Domain extends string>(
             case 'token.last':
             case 'token.middle':
             case 'token.any':
+            case 'token.pattern':
             case 'not':
             case 'and':
             case 'or':
@@ -1278,6 +1281,8 @@ export function solveQuery<const Domain extends string>(
         const targetMiddleTokens = new Set(targetValues.flatMap(s => splitTokens(s, separator).slice(1, -1)))
         const tokenCounts = [...new Set(domain.map(s => splitTokens(s, separator).length))].sort((a, b) => a - b)
 
+        yield* tokenPatternCandidates(targetValues, separator)
+
         yield {
             source: { family: 'delimiter.presence', kind: 'primitive' },
             mask: computeBigMask(domain, s => s.includes(separator)),
@@ -1337,6 +1342,24 @@ export function solveQuery<const Domain extends string>(
                 source: { family: 'token.any', kind: 'primitive' },
                 mask: computeBigMask(domain, s => splitTokens(s, separator).includes(token)),
                 expr: tokenAnyExpr(token, separator),
+            }
+        }
+    }
+
+    function* tokenPatternCandidates(values: readonly string[], separator: string): Generator<BigCandidate> {
+        const emitted = new Set<string>()
+        for (const group of tokenPatternGroups(values, separator)) {
+            if (group.length < 2) continue
+
+            const source = tokenPatternSource(group, separator)
+            if (emitted.has(source)) continue
+            emitted.add(source)
+
+            const valueSet = new Set(group)
+            yield {
+                source: { family: 'token.pattern', kind: 'primitive' },
+                mask: computeBigMask(domain, s => valueSet.has(s)),
+                expr: { feature: { type: 'regexTest', args: { source } } },
             }
         }
     }
@@ -1403,6 +1426,81 @@ function orExpr(expressions: readonly Expr[]): Expr {
     const [first, ...rest] = expressions
     if (first === undefined) throw new Error('cannot build an OR expression with no terms')
     return rest.reduce<Expr>((left, right) => ({ type: 'or', left, right }), first)
+}
+
+function tokenPatternGroups(values: readonly string[], separator: string): string[][] {
+    const groups = new Map<string, string[]>()
+    const addGroup = (key: string, value: string) => {
+        const group = groups.get(key)
+        if (group === undefined) groups.set(key, [value])
+        else group.push(value)
+    }
+
+    for (const value of values) {
+        const tokens = splitTokens(value, separator)
+        addGroup('all', value)
+        addGroup(`first:${tokens[0]!}`, value)
+        addGroup(`last:${tokens.at(-1)!}`, value)
+        if (tokens.length > 1) addGroup(`first-last:${tokens[0]!}:${tokens.at(-1)!}`, value)
+    }
+
+    return [...groups.values()].map(group => [...new Set(group)].sort())
+}
+
+function tokenPatternSource(values: readonly string[], separator: string): string {
+    const root = newTokenTrie()
+    for (const value of values) insertTokenTrie(root, splitTokens(value, separator))
+    return `^${renderTokenTrieChildren(root, separator)}$`
+}
+
+type TokenTrie = {
+    terminal: boolean
+    children: Map<string, TokenTrie>
+}
+
+function newTokenTrie(): TokenTrie {
+    return { terminal: false, children: new Map() }
+}
+
+function insertTokenTrie(root: TokenTrie, tokens: readonly string[]): void {
+    let node = root
+    for (const token of tokens) {
+        const next = node.children.get(token) ?? newTokenTrie()
+        node.children.set(token, next)
+        node = next
+    }
+    node.terminal = true
+}
+
+function renderTokenTrieChildren(node: TokenTrie, separator: string): string {
+    const alternatives = [...node.children]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([token, child]) => `${escapeRegex(token)}${renderTokenTrieSuffix(child, separator)}`)
+    return renderRegexAlternatives(alternatives)
+}
+
+function renderTokenTrieSuffix(node: TokenTrie, separator: string): string {
+    if (node.children.size === 0) return ''
+
+    const alternatives = [...node.children]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([token, child]) => `${escapeRegex(separator)}${escapeRegex(token)}${renderTokenTrieSuffix(child, separator)}`)
+    const rendered = renderRegexAlternatives(alternatives)
+    return node.terminal ? optionalRegex(rendered) : rendered
+}
+
+function renderRegexAlternatives(alternatives: readonly string[]): string {
+    if (alternatives.length === 0) return ''
+    if (alternatives.length === 1) return alternatives[0]!
+    return `(?:${alternatives.join('|')})`
+}
+
+function optionalRegex(value: string): string {
+    return value.startsWith('(?:') && value.endsWith(')') ? `${value}?` : `(?:${value})?`
+}
+
+function escapeRegex(value: string): string {
+    return value.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&')
 }
 
 function splitTokens(value: string, separator: string): string[] {
