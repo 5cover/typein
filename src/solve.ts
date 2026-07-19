@@ -22,8 +22,11 @@ export type FamilyId =
     | 'at.undefined'
     | 'at.relation'
     | 'startsWith'
+    | 'startsWith.at'
     | 'endsWith'
     | 'includes'
+    | 'indexOf.relation'
+    | 'lastIndexOf.relation'
     | 'delimiter.presence'
     | 'token.count'
     | 'token.first'
@@ -233,8 +236,11 @@ export function solve<const Domain extends string>(
             case 'charAt.relation':
             case 'at.relation':
             case 'startsWith':
+            case 'startsWith.at':
             case 'endsWith':
             case 'includes':
+            case 'indexOf.relation':
+            case 'lastIndexOf.relation':
             case 'delimiter.presence':
             case 'token.count':
             case 'token.first':
@@ -1082,8 +1088,11 @@ export function solveQuery<const Domain extends string>(
             case 'charAt.relation':
             case 'at.relation':
             case 'startsWith':
+            case 'startsWith.at':
             case 'endsWith':
             case 'includes':
+            case 'indexOf.relation':
+            case 'lastIndexOf.relation':
             case 'delimiter.presence':
             case 'token.first':
             case 'token.last':
@@ -1108,6 +1117,7 @@ export function solveQuery<const Domain extends string>(
         yield* charAtCandidates(m.maxLength)
         yield* atCandidates(m.maxLength)
         yield* stringMembershipCandidates()
+        yield* positionalStringCandidates()
         yield* hyphenTokenCandidates()
     }
 
@@ -1296,6 +1306,49 @@ export function solveQuery<const Domain extends string>(
         }
     }
 
+    function* positionalStringCandidates(): Generator<BigCandidate> {
+        const needles = positionNeedles(targetValues, '-')
+
+        for (const { needle, position } of startsWithAtNeedles(targetValues, '-')) {
+            yield {
+                source: { family: 'startsWith.at', kind: 'primitive' },
+                mask: computeBigMask(domain, s => s.startsWith(needle, position)),
+                expr: { feature: { type: 'startsWithAt', args: { s: needle, n: position } } },
+            }
+        }
+
+        for (const needle of needles) {
+            yield* indexRelationCandidates('indexOf.relation', 'indexOf', needle)
+            yield* indexRelationCandidates('lastIndexOf.relation', 'lastIndexOf', needle)
+        }
+    }
+
+    function* indexRelationCandidates(
+        family: 'indexOf.relation' | 'lastIndexOf.relation',
+        feature: 'indexOf' | 'lastIndexOf',
+        needle: string,
+    ): Generator<BigCandidate> {
+        const positions = new Set(targetValues.map(s => s[feature](needle)))
+        for (const position of positions) {
+            for (const op of ['<', '<=', '>', '>=', '='] as const) {
+                yield {
+                    source: { family, kind: 'primitive' },
+                    mask: computeBigMask(domain, s => compare(s[feature](needle), op, position)),
+                    expr: {
+                        feature: {
+                            type: feature,
+                            args: { value: needle },
+                            child: {
+                                type: op,
+                                args: { type: 'lit', args: position },
+                            },
+                        },
+                    },
+                }
+            }
+        }
+    }
+
     function* hyphenTokenCandidates(): Generator<BigCandidate> {
         const separator = '-'
         if (!domain.some(s => s.includes(separator)) && !targetValues.some(s => s.includes(separator))) return
@@ -1456,6 +1509,46 @@ function tokenAnyExpr(token: string, separator: string): Expr {
         { feature: { type: 'endsWith', args: { s: `${separator}${token}` } } },
         { feature: { type: 'includes', args: { value: `${separator}${token}${separator}` } } },
     ])
+}
+
+function positionNeedles(values: readonly string[], separator: string): string[] {
+    const needles = new Set<string>()
+    for (const value of values) {
+        const tokens = splitTokens(value, separator)
+        for (const token of tokens) {
+            if (token.length > 1) needles.add(token)
+        }
+        for (let i = 0; i < tokens.length; ++i) {
+            const token = tokens[i]!
+            if (i > 0) needles.add(`${separator}${token}`)
+            if (i < tokens.length - 1) needles.add(`${token}${separator}`)
+            if (i > 0 && i < tokens.length - 1) needles.add(`${separator}${token}${separator}`)
+        }
+    }
+    return [...needles].sort()
+}
+
+function startsWithAtNeedles(values: readonly string[], separator: string): { needle: string; position: number }[] {
+    const needles = new Map<string, { needle: string; position: number }>()
+    for (const value of values) {
+        for (const position of tokenBoundaryPositions(value, separator)) {
+            const tail = value.slice(position)
+            if (tail.length > 1) needles.set(`${position}:${tail}`, { needle: tail, position })
+
+            const nextSeparator = value.indexOf(separator, position + 1)
+            if (nextSeparator > position) {
+                const segment = value.slice(position, nextSeparator)
+                if (segment.length > 1) needles.set(`${position}:${segment}`, { needle: segment, position })
+            }
+        }
+    }
+    return [...needles.values()].sort((a, b) => a.position - b.position || a.needle.localeCompare(b.needle))
+}
+
+function tokenBoundaryPositions(value: string, separator: string): number[] {
+    const positions: number[] = []
+    for (let i = value.indexOf(separator); i >= 0; i = value.indexOf(separator, i + 1)) positions.push(i)
+    return positions
 }
 
 function orExpr(expressions: readonly Expr[]): Expr {

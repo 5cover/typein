@@ -22,8 +22,11 @@ type FeatureString =
     | F<'charAt', 'char' | 'undefined', { n: number }>
     | F<'charCodeAt', 'number', { n: number }>
     | F<'startsWith', 'boolean', { s: string }>
+    | F<'startsWithAt', 'boolean', { s: string; n: number }>
     | F<'endsWith', 'boolean', { s: string }>
     | F<'includes', 'boolean', { value: string }>
+    | F<'indexOf', 'number', { value: string }>
+    | F<'lastIndexOf', 'number', { value: string }>
     | F<'regexTest', 'boolean', { source: string }>
 
 type FeatureChar = FeatureLiteral<string>

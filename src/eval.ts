@@ -80,10 +80,16 @@ function evalFeatureLevel(parent: unknown, feat: Feature): unknown {
             return String(parent).charCodeAt(feat.args.n)
         case 'startsWith':
             return String(parent).startsWith(feat.args.s)
+        case 'startsWithAt':
+            return String(parent).startsWith(feat.args.s, feat.args.n)
         case 'endsWith':
             return String(parent).endsWith(feat.args.s)
         case 'includes':
             return String(parent).includes(feat.args.value)
+        case 'indexOf':
+            return String(parent).indexOf(feat.args.value)
+        case 'lastIndexOf':
+            return String(parent).lastIndexOf(feat.args.value)
         case 'regexTest':
             return new RegExp(feat.args.source).test(String(parent))
         case '<':

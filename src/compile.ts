@@ -70,12 +70,25 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
             return f.createCallExpression(f.createPropertyAccessExpression(parent, 'startsWith'), undefined, [
                 f.createStringLiteral(feat.args.s),
             ])
+        case 'startsWithAt':
+            return f.createCallExpression(f.createPropertyAccessExpression(parent, 'startsWith'), undefined, [
+                f.createStringLiteral(feat.args.s),
+                f.createNumericLiteral(feat.args.n),
+            ])
         case 'endsWith':
             return f.createCallExpression(f.createPropertyAccessExpression(parent, 'endsWith'), undefined, [
                 f.createStringLiteral(feat.args.s),
             ])
         case 'includes':
             return f.createCallExpression(f.createPropertyAccessExpression(parent, 'includes'), undefined, [
+                f.createStringLiteral(feat.args.value),
+            ])
+        case 'indexOf':
+            return f.createCallExpression(f.createPropertyAccessExpression(parent, 'indexOf'), undefined, [
+                f.createStringLiteral(feat.args.value),
+            ])
+        case 'lastIndexOf':
+            return f.createCallExpression(f.createPropertyAccessExpression(parent, 'lastIndexOf'), undefined, [
                 f.createStringLiteral(feat.args.value),
             ])
         case 'regexTest':
@@ -131,7 +144,9 @@ export function literalToExpression(value: string | number | boolean | undefined
         case 'string':
             return f.createStringLiteral(value)
         case 'number':
-            return f.createNumericLiteral(value)
+            return value < 0
+                ? f.createPrefixUnaryExpression(tsc.SyntaxKind.MinusToken, f.createNumericLiteral(Math.abs(value)))
+                : f.createNumericLiteral(value)
         case 'boolean':
             return value ? f.createTrue() : f.createFalse()
         case 'undefined':
