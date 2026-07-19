@@ -35,19 +35,16 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
         case 'oneOf':
             return f.createCallExpression(
                 f.createPropertyAccessExpression(
-                    f.createParenthesizedExpression(
-                        f.createAsExpression(
-                            f.createArrayLiteralExpression(feat.args.values.map(value => f.createStringLiteral(value))),
-                            f.createTypeOperatorNode(
-                                tsc.SyntaxKind.ReadonlyKeyword,
-                                f.createArrayTypeNode(f.createKeywordTypeNode(tsc.SyntaxKind.StringKeyword)),
-                            ),
-                        ),
-                    ),
+                    f.createArrayLiteralExpression(feat.args.values.map(value => f.createStringLiteral(value))),
                     'includes',
                 ),
                 undefined,
-                [parent],
+                [
+                    f.createAsExpression(
+                        parent,
+                        f.createKeywordTypeNode(tsc.SyntaxKind.StringKeyword),
+                    ),
+                ],
             )
         case 'length':
             return f.createPropertyAccessExpression(parent, 'length')

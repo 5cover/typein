@@ -99,8 +99,11 @@ export type QueryProfile = SolveProfile & {
     exactCandidates: number
     subsetCandidates: number
     supersetCandidates: number
+    overlapCandidates: number
+    retainedOverlap: number
     orStates: number
     andStates: number
+    dnfStates: number
     orStateLimitHit: boolean
     andStateLimitHit: boolean
     frontierTruncations: number
@@ -150,9 +153,11 @@ export type QueryFamilyStats = {
     exact: number
     subset: number
     superset: number
+    overlap: number
     unrelated: number
     retainedSubset: number
     retainedSuperset: number
+    retainedOverlap: number
     improvements: number
 }
 
@@ -711,6 +716,10 @@ type QuerySearchResult = {
     cost: number
 }
 
+type GoalSearchResult = QuerySearchResult & {
+    falsePositives: number
+}
+
 export function solveQuery<const Domain extends string>(
     domain: readonly Domain[],
     targetValues: readonly Domain[],
@@ -738,8 +747,11 @@ export function solveQuery<const Domain extends string>(
         exactCandidates: 0,
         subsetCandidates: 0,
         supersetCandidates: 0,
+        overlapCandidates: 0,
+        retainedOverlap: 0,
         orStates: 0,
         andStates: 0,
+        dnfStates: 0,
         orStateLimitHit: false,
         andStateLimitHit: false,
         frontierTruncations: 0,
@@ -756,7 +768,9 @@ export function solveQuery<const Domain extends string>(
     let proof: QueryProfile['proof'] = 'query-normal-forms'
     const subsetAtoms = new Map<BigMask, QueryAtom>()
     const supersetAtoms = new Map<BigMask, QueryAtom>()
+    const overlapAtoms = new Map<BigMask, QueryAtom>()
     const familyStats = new Map<FamilyId, QueryFamilyStats>()
+    const enableOverlapSearch = domain.length <= 256
 
     const primitiveStart = performance.now()
     for (const candidate of targetCandidates()) considerPrimitive(candidate)
@@ -773,7 +787,20 @@ export function solveQuery<const Domain extends string>(
     const andResult = searchAndFilter(reducedSupersetAtoms, bestCost)
     if (andResult !== undefined) improve(andResult.expr)
 
-    const dnfAtoms = pairwiseAndTerms(queryFrontier(reducedSupersetAtoms, limits.dnfFrontier), bestCost)
+    const dnfAtomPool = [...subsetAtoms.values(), ...(enableOverlapSearch ? overlapAtoms.values() : []), ...reducedSupersetAtoms]
+    if (enableOverlapSearch) {
+        const nearDnfAtoms = nearTargetSubsetTerms(dnfAtomPool, bestCost)
+        if (nearDnfAtoms.length > 0) {
+            const nearDnfResult = searchOrCover(reduceSubsetAtoms([...subsetAtoms.values(), ...nearDnfAtoms]), bestCost)
+            if (nearDnfResult !== undefined) improve(nearDnfResult.expr)
+        }
+    }
+
+    const dnfFrontier = queryFrontier(dnfAtomPool, limits.dnfFrontier)
+    const dnfAtoms = [
+        ...conjunctiveSubsetTerms(dnfFrontier, bestCost),
+        ...pairwiseAndTerms(queryFrontier(reducedSupersetAtoms, limits.dnfFrontier), bestCost),
+    ]
     if (dnfAtoms.length > 0) {
         const dnfResult = searchOrCover(reduceSubsetAtoms([...subsetAtoms.values(), ...dnfAtoms]), bestCost)
         if (dnfResult !== undefined) improve(dnfResult.expr)
@@ -832,9 +859,20 @@ export function solveQuery<const Domain extends string>(
             if (retained) stats.retainedSuperset++
         }
 
+        if (isTargetOverlap(mask)) {
+            profile.overlapCandidates++
+            stats.overlap++
+            const retainedOverlap = enableOverlapSearch && !retained && retainCheapest(overlapAtoms, mask, expr)
+            retained = retainedOverlap || retained
+            if (retainedOverlap) {
+                profile.retainedOverlap++
+                stats.retainedOverlap++
+            }
+        }
+
         if (!retained) {
             profile.primitiveDiscarded++
-            if (!isStrictTargetSubset(mask) && !isStrictTargetSuperset(mask)) stats.unrelated++
+            if (!isStrictTargetSubset(mask) && !isStrictTargetSuperset(mask) && !isTargetOverlap(mask)) stats.unrelated++
         }
     }
 
@@ -999,6 +1037,15 @@ export function solveQuery<const Domain extends string>(
         return undefined
     }
 
+    function goalState(mask: BigMask, expr: Expr | undefined, cost: number, goal: BigMask): GoalSearchResult {
+        return {
+            mask,
+            expr,
+            cost,
+            falsePositives: falsePositiveCountForGoal(mask, goal),
+        }
+    }
+
     function pairwiseAndTerms(atoms: readonly QueryAtom[], bound: number): QueryAtom[] {
         const terms = new Map<BigMask, QueryAtom>()
         const usefulAtoms = atoms.filter(atom => atom.cost < bound && isStrictTargetSuperset(atom.mask)).sort((a, b) => a.cost - b.cost)
@@ -1024,6 +1071,189 @@ export function solveQuery<const Domain extends string>(
         return [...terms.values()]
     }
 
+    function nearTargetSubsetTerms(atoms: readonly QueryAtom[], bound: number): QueryAtom[] {
+        const terms = new Map<BigMask, QueryAtom>()
+        for (let i = 0; i < domain.length; ++i) {
+            const bit = 1n << BigInt(i)
+            if ((targetMask & bit) === 0n) continue
+
+            const goal = targetMask ^ bit
+            const result = greedyAndFilterGoal(atoms, goal, bound) ?? searchAndFilterGoal(queryFrontier(atoms, limits.dnfFrontier), goal, bound)
+            if (result?.expr !== undefined) retainCheapest(terms, result.mask, result.expr)
+        }
+        return [...terms.values()]
+    }
+
+    function greedyAndFilterGoal(atoms: readonly QueryAtom[], goal: BigMask, bound: number): QuerySearchResult | undefined {
+        const starts = atoms
+            .filter(atom => atom.cost < bound && containsGoal(atom.mask, goal))
+            .sort((a, b) => falsePositiveCountForGoal(a.mask, goal) - falsePositiveCountForGoal(b.mask, goal) || a.cost - b.cost || exprCostCompare(a.expr, b.expr))
+            .slice(0, 24)
+
+        let best: QuerySearchResult | undefined
+        for (const start of starts) {
+            let state: QuerySearchResult = { mask: start.mask, expr: start.expr, cost: start.cost }
+
+            for (;;) {
+                if (state.mask === goal) {
+                    if (best === undefined || state.cost < best.cost) best = state
+                    break
+                }
+
+                const next = bestGreedyStep(state, atoms, goal, bound)
+                if (next === undefined) break
+                state = next
+            }
+        }
+
+        return best
+    }
+
+    function bestGreedyStep(
+        state: QuerySearchResult,
+        atoms: readonly QueryAtom[],
+        goal: BigMask,
+        bound: number,
+    ): QuerySearchResult | undefined {
+        let best: QuerySearchResult | undefined
+        let bestFalsePositives = Number.POSITIVE_INFINITY
+
+        for (const atom of atoms) {
+            const nextMask = state.mask & atom.mask
+            if (nextMask === state.mask || !containsGoal(nextMask, goal)) continue
+
+            const lowerBound = state.cost + ' && '.length + atom.cost
+            if (lowerBound >= bound) continue
+
+            const nextExpr: Expr = { type: 'and', left: state.expr!, right: atom.expr }
+            const nextCost = sourceLength(nextExpr)
+            if (nextCost >= bound) continue
+
+            const nextFalsePositives = falsePositiveCountForGoal(nextMask, goal)
+            if (
+                best !== undefined &&
+                (nextFalsePositives > bestFalsePositives || (nextFalsePositives === bestFalsePositives && nextCost >= best.cost))
+            ) {
+                continue
+            }
+
+            best = { mask: nextMask, expr: nextExpr, cost: nextCost }
+            bestFalsePositives = nextFalsePositives
+        }
+
+        return best
+    }
+
+    function searchAndFilterGoal(atoms: readonly QueryAtom[], goal: BigMask, bound: number): QuerySearchResult | undefined {
+        const usefulAtoms = atoms
+            .filter(atom => atom.cost < bound && containsGoal(atom.mask, goal))
+            .sort((a, b) => falsePositiveCountForGoal(a.mask, goal) - falsePositiveCountForGoal(b.mask, goal) || a.cost - b.cost || exprCostCompare(a.expr, b.expr))
+        const bestStates = new Map<BigMask, QuerySearchResult>()
+        const queue = new GoalQueue()
+
+        for (const atom of usefulAtoms) {
+            const current = bestStates.get(atom.mask)
+            if (current !== undefined && atom.cost >= current.cost) continue
+            const state = goalState(atom.mask, atom.expr, atom.cost, goal)
+            bestStates.set(atom.mask, state)
+            queue.push(state)
+        }
+
+        for (let state = queue.pop(); state !== undefined; state = queue.pop()) {
+            if (bestStates.get(state.mask)?.cost !== state.cost) continue
+            if (state.cost >= bound) continue
+
+            profile.dnfStates++
+            if (profile.dnfStates > limits.andStates) {
+                proof = 'bounded-query-normal-forms'
+                profile.andStateLimitHit = true
+                return undefined
+            }
+            if (state.mask === goal && state.expr !== undefined) return state
+
+            for (const atom of usefulAtoms) {
+                const nextMask = state.mask & atom.mask
+                if (nextMask === state.mask || !containsGoal(nextMask, goal)) continue
+
+                profile.dnfTermsAttempted++
+                const lowerBound = state.cost + ' && '.length + atom.cost
+                if (lowerBound >= bound) {
+                    profile.compositionPruned++
+                    continue
+                }
+
+                const nextExpr: Expr = { type: 'and', left: state.expr!, right: atom.expr }
+                const nextCost = sourceLength(nextExpr)
+                profile.compositionConsidered++
+                if (nextCost >= bound) continue
+
+                const current = bestStates.get(nextMask)
+                if (current !== undefined && nextCost >= current.cost) continue
+
+                const next = goalState(nextMask, nextExpr, nextCost, goal)
+                bestStates.set(nextMask, next)
+                queue.push(next)
+            }
+        }
+
+        return undefined
+    }
+
+    function conjunctiveSubsetTerms(atoms: readonly QueryAtom[], bound: number): QueryAtom[] {
+        const usefulAtoms = atoms
+            .filter(atom => atom.cost < bound && intersectsTarget(atom.mask))
+            .sort((a, b) => falsePositiveCount(a.mask) - falsePositiveCount(b.mask) || a.cost - b.cost || exprCostCompare(a.expr, b.expr))
+        const terms = new Map<BigMask, QueryAtom>()
+        const bestStates = new Map<BigMask, QuerySearchResult>()
+        const queue = new QueryQueue()
+
+        for (const atom of usefulAtoms) {
+            const state = { mask: atom.mask, expr: atom.expr, cost: atom.cost }
+            bestStates.set(atom.mask, state)
+            queue.push(state)
+        }
+
+        for (let state = queue.pop(); state !== undefined; state = queue.pop()) {
+            if (bestStates.get(state.mask)?.cost !== state.cost) continue
+            if (state.cost >= bound) continue
+
+            profile.dnfStates++
+            if (profile.dnfStates > limits.andStates) {
+                proof = 'bounded-query-normal-forms'
+                profile.andStateLimitHit = true
+                return [...terms.values()]
+            }
+
+            if (isStrictTargetSubset(state.mask) && state.expr !== undefined) retainCheapest(terms, state.mask, state.expr)
+
+            for (const atom of usefulAtoms) {
+                const nextMask = state.mask & atom.mask
+                if (nextMask === state.mask || !intersectsTarget(nextMask)) continue
+
+                profile.dnfTermsAttempted++
+                const lowerBound = state.cost + ' && '.length + atom.cost
+                if (lowerBound >= bound) {
+                    profile.compositionPruned++
+                    continue
+                }
+
+                const nextExpr: Expr = { type: 'and', left: state.expr!, right: atom.expr }
+                const nextCost = sourceLength(nextExpr)
+                profile.compositionConsidered++
+                if (nextCost >= bound) continue
+
+                const current = bestStates.get(nextMask)
+                if (current !== undefined && nextCost >= current.cost) continue
+
+                const next = { mask: nextMask, expr: nextExpr, cost: nextCost }
+                bestStates.set(nextMask, next)
+                queue.push(next)
+            }
+        }
+
+        return [...terms.values()]
+    }
+
     function isUsefulIntermediate(mask: BigMask): boolean {
         return mask !== 0n && mask !== fullMask
     }
@@ -1038,6 +1268,22 @@ export function solveQuery<const Domain extends string>(
 
     function containsTarget(mask: BigMask): boolean {
         return (targetMask & ~mask) === 0n
+    }
+
+    function containsGoal(mask: BigMask, goal: BigMask): boolean {
+        return (goal & ~mask) === 0n
+    }
+
+    function falsePositiveCountForGoal(mask: BigMask, goal: BigMask): number {
+        return popcountBig(mask & ~goal)
+    }
+
+    function intersectsTarget(mask: BigMask): boolean {
+        return (mask & targetMask) !== 0n
+    }
+
+    function isTargetOverlap(mask: BigMask): boolean {
+        return intersectsTarget(mask) && !isStrictTargetSubset(mask) && !isStrictTargetSuperset(mask) && mask !== targetMask
     }
 
     function covers(left: BigMask, right: BigMask): boolean {
@@ -1059,9 +1305,11 @@ export function solveQuery<const Domain extends string>(
             exact: 0,
             subset: 0,
             superset: 0,
+            overlap: 0,
             unrelated: 0,
             retainedSubset: 0,
             retainedSuperset: 0,
+            retainedOverlap: 0,
             improvements: 0,
         }
         familyStats.set(family, stats)
@@ -1795,4 +2043,64 @@ class QueryQueue {
         this.#items[left] = this.#items[right]!
         this.#items[right] = temporary
     }
+}
+
+class GoalQueue {
+    #items: GoalSearchResult[] = []
+
+    push(item: GoalSearchResult): void {
+        this.#items.push(item)
+        this.#bubbleUp(this.#items.length - 1)
+    }
+
+    pop(): GoalSearchResult | undefined {
+        const first = this.#items[0]
+        const last = this.#items.pop()
+        if (first === undefined || last === undefined) return undefined
+
+        if (this.#items.length > 0) {
+            this.#items[0] = last
+            this.#bubbleDown(0)
+        }
+
+        return first
+    }
+
+    #bubbleUp(index: number): void {
+        while (index > 0) {
+            const parent = (index - 1) >> 1
+            if (compareGoalState(this.#items[parent]!, this.#items[index]!) <= 0) break
+            this.#swap(index, parent)
+            index = parent
+        }
+    }
+
+    #bubbleDown(index: number): void {
+        for (;;) {
+            const left = index * 2 + 1
+            const right = left + 1
+            let smallest = index
+
+            if (left < this.#items.length && compareGoalState(this.#items[left]!, this.#items[smallest]!) < 0) {
+                smallest = left
+            }
+            if (right < this.#items.length && compareGoalState(this.#items[right]!, this.#items[smallest]!) < 0) {
+                smallest = right
+            }
+            if (smallest === index) break
+
+            this.#swap(index, smallest)
+            index = smallest
+        }
+    }
+
+    #swap(left: number, right: number): void {
+        const temporary = this.#items[left]!
+        this.#items[left] = this.#items[right]!
+        this.#items[right] = temporary
+    }
+}
+
+function compareGoalState(left: GoalSearchResult, right: GoalSearchResult): number {
+    return left.falsePositives - right.falsePositives || left.cost - right.cost
 }
