@@ -2,7 +2,7 @@
 
 import { Command, InvalidArgumentError, Option, type OptionValues } from '@commander-js/extra-typings'
 import * as emit from './emit.js'
-import { defaultQueryLimits, solve, solveQuery, type QueryLimits } from './solve.js'
+import { defaultQueryFeatures, defaultQueryLimits, solve, solveQuery, type QueryFeatures, type QueryLimits } from './solve.js'
 import { costComparators, printExpression, sourceLength } from './cost.js'
 import { coverageReport, interestReport, profileReport, queryProfileReport, queryReport } from './report.js'
 import { verifyQuery, verifyResult } from './eval.js'
@@ -89,6 +89,7 @@ function addQueryOptions<Args extends any[], Opts extends OptionValues, GlobalOp
         )
         .option('--query-superset-frontier <count>', 'maximum superset atoms after dominance reduction', parsePositiveInteger, defaultQueryLimits.supersetFrontier)
         .option('--query-dnf-frontier <count>', 'maximum superset atoms used for pairwise DNF terms', parsePositiveInteger, defaultQueryLimits.dnfFrontier)
+        .option('--query-regex', 'allow regex-backed query candidates', defaultQueryFeatures.allowRegex)
 }
 
 function collect(value: string, previous: string[] = []): string[] {
@@ -178,7 +179,7 @@ function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOpti
 
     const totalStart = performance.now()
     const solveStart = performance.now()
-    const result = solveQuery(domain, targets, costComparators[opts.cost], queryLimitsFromOptions(opts))
+    const result = solveQuery(domain, targets, costComparators[opts.cost], queryLimitsFromOptions(opts), queryFeaturesFromOptions(opts))
     const solveMs = performance.now() - solveStart
 
     let reportMs = 0
@@ -240,7 +241,7 @@ function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
         for (;;) {
             const totalStart = performance.now()
             const solveStart = performance.now()
-            const result = solveQuery(domain, benchmark.targets, costComparators.source, limits)
+            const result = solveQuery(domain, benchmark.targets, costComparators.source, limits, queryFeaturesFromOptions(opts))
             const solveMs = performance.now() - solveStart
             const totalMs = performance.now() - totalStart
             const fallbackCost = fallbackSourceLength(benchmark.targets)
@@ -318,6 +319,7 @@ type QueryOptionValues = {
     querySupersetPreFrontier: number
     querySupersetFrontier: number
     queryDnfFrontier: number
+    queryRegex: boolean
 }
 
 function queryLimitsFromOptions(opts: QueryOptionValues): QueryLimits {
@@ -327,6 +329,12 @@ function queryLimitsFromOptions(opts: QueryOptionValues): QueryLimits {
         supersetPreFrontier: opts.querySupersetPreFrontier,
         supersetFrontier: opts.querySupersetFrontier,
         dnfFrontier: opts.queryDnfFrontier,
+    }
+}
+
+function queryFeaturesFromOptions(opts: QueryOptionValues): QueryFeatures {
+    return {
+        allowRegex: opts.queryRegex,
     }
 }
 

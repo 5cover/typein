@@ -66,6 +66,8 @@ function evalFeatureLevel(parent: unknown, feat: Feature): unknown {
     switch (feat.type) {
         case 'self':
             return parent
+        case 'oneOf':
+            return feat.args.values.includes(String(parent))
         case 'length':
             return String(parent).length
         case 'splitLength':

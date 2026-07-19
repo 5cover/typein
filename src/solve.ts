@@ -11,6 +11,7 @@ export type FamilyKind = 'primitive' | 'complement' | 'composition'
 
 export type FamilyId =
     | 'self.equality'
+    | 'self.oneOf'
     | 'length.relation'
     | 'charAt.equality'
     | 'charAt.defined'
@@ -105,6 +106,7 @@ export type QueryProfile = SolveProfile & {
     dnfTermsAttempted: number
     proof: 'query-normal-forms' | 'bounded-query-normal-forms'
     limits: QueryLimits
+    allowRegex: boolean
 }
 
 export type QueryResult = {
@@ -122,12 +124,20 @@ export type QueryLimits = {
     dnfFrontier: number
 }
 
+export type QueryFeatures = {
+    allowRegex: boolean
+}
+
 export const defaultQueryLimits: QueryLimits = {
     orStates: 200,
     andStates: 200,
     supersetPreFrontier: 512,
     supersetFrontier: 64,
     dnfFrontier: 32,
+}
+
+export const defaultQueryFeatures: QueryFeatures = {
+    allowRegex: false,
 }
 
 export type QueryFamilyStats = {
@@ -215,6 +225,7 @@ export function solve<const Domain extends string>(
             case 'charAt.equality':
             case 'at.equality':
                 return true
+            case 'self.oneOf':
             case 'charAt.defined':
             case 'charAt.undefined':
             case 'at.defined':
@@ -699,8 +710,10 @@ export function solveQuery<const Domain extends string>(
     targetValues: readonly Domain[],
     exprCostCompare: (a: Expr, b: Expr) => number,
     queryLimits: QueryLimits = defaultQueryLimits,
+    queryFeatures: QueryFeatures = defaultQueryFeatures,
 ): QueryResult {
     const limits = normalizeQueryLimits(queryLimits)
+    const features = { ...defaultQueryFeatures, ...queryFeatures }
     const fullMask = (1n << BigInt(domain.length)) - 1n
     const targetValueSet = new Set(targetValues)
     const targetMask = computeBigMask(domain, s => targetValueSet.has(s))
@@ -729,8 +742,9 @@ export function solveQuery<const Domain extends string>(
         dnfTermsAttempted: 0,
         proof: 'query-normal-forms',
         limits,
+        allowRegex: features.allowRegex,
     }
-    const fallback = exactSubsetExpr(targetValues)
+    const fallback = targetValues.length > 1 ? oneOfExpr(targetValues) : exactSubsetExpr(targetValues)
     let best = fallback
     let bestCost = sourceLength(fallback)
     let proof: QueryProfile['proof'] = 'query-normal-forms'
@@ -1056,6 +1070,7 @@ export function solveQuery<const Domain extends string>(
     function canInvertQueryComplement(candidate: BigCandidate): boolean {
         switch (candidate.source.family) {
             case 'self.equality':
+            case 'self.oneOf':
             case 'length.relation':
             case 'charAt.equality':
             case 'at.equality':
@@ -1087,6 +1102,7 @@ export function solveQuery<const Domain extends string>(
 
     function* targetCandidates(): Generator<BigCandidate> {
         const m = metrics()
+        yield* selfMembershipCandidates()
         yield* selfEqualityCandidates()
         yield* lengthCandidates(m.lengths)
         yield* charAtCandidates(m.maxLength)
@@ -1102,6 +1118,15 @@ export function solveQuery<const Domain extends string>(
                 mask: computeBigMask(domain, s => s === value),
                 expr: selfEqualityExpr(value),
             }
+        }
+    }
+
+    function* selfMembershipCandidates(): Generator<BigCandidate> {
+        if (targetValues.length < 2) return
+        yield {
+            source: { family: 'self.oneOf', kind: 'primitive' },
+            mask: targetMask,
+            expr: oneOfExpr(targetValues),
         }
     }
 
@@ -1281,7 +1306,9 @@ export function solveQuery<const Domain extends string>(
         const targetMiddleTokens = new Set(targetValues.flatMap(s => splitTokens(s, separator).slice(1, -1)))
         const tokenCounts = [...new Set(domain.map(s => splitTokens(s, separator).length))].sort((a, b) => a - b)
 
-        yield* tokenPatternCandidates(targetValues, separator)
+        // Regex synthesis is intentionally opt-in. It is a separate embedded
+        // language with a much higher analysis ceiling than native JS strings.
+        if (features.allowRegex) yield* tokenPatternCandidates(targetValues, separator)
 
         yield {
             source: { family: 'delimiter.presence', kind: 'primitive' },
@@ -1411,6 +1438,15 @@ function exactSubsetExpr(values: readonly string[]): Expr {
     if (first === undefined) throw new Error('cannot build a guard for an empty target subset')
 
     return rest.reduce<Expr>((expr, value) => ({ type: 'or', left: expr, right: selfEqualityExpr(value) }), selfEqualityExpr(first))
+}
+
+function oneOfExpr(values: readonly string[]): Expr {
+    return {
+        feature: {
+            type: 'oneOf',
+            args: { values: [...values].sort() },
+        },
+    }
 }
 
 function tokenAnyExpr(token: string, separator: string): Expr {

@@ -32,6 +32,23 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
     switch (feat.type) {
         case 'self':
             return parent
+        case 'oneOf':
+            return f.createCallExpression(
+                f.createPropertyAccessExpression(
+                    f.createParenthesizedExpression(
+                        f.createAsExpression(
+                            f.createArrayLiteralExpression(feat.args.values.map(value => f.createStringLiteral(value))),
+                            f.createTypeOperatorNode(
+                                tsc.SyntaxKind.ReadonlyKeyword,
+                                f.createArrayTypeNode(f.createKeywordTypeNode(tsc.SyntaxKind.StringKeyword)),
+                            ),
+                        ),
+                    ),
+                    'includes',
+                ),
+                undefined,
+                [parent],
+            )
         case 'length':
             return f.createPropertyAccessExpression(parent, 'length')
         case 'splitLength':
