@@ -14,22 +14,23 @@ type RegistryNode = {
     children: Map<string, RegistryNode>
 }
 
-export function tsModule<S extends string>(
-    S: readonly S[],
-    best: Map<Mask, Expr>,
-    typeName: string,
-    parameterName = 's',
-    guardKey = 'is',
-): string {
+export type EmitOptions = {
+    typeName: string
+    parameterName: string
+    defineType?: boolean
+}
+
+export type EmitModuleOptions = EmitOptions & { guardKey: string }
+
+export function tsModule<S extends string>(S: readonly S[], best: Map<Mask, Expr>, opts: EmitModuleOptions): string {
     const sortedDomain = [...S].sort()
     const statements: tsc.Statement[] = []
 
-    if (S.includes(guardKey as S)) throw new Error(`domain value "${guardKey}" conflicts with the registry guard key`)
+    if (S.includes(opts.guardKey as S))
+        throw new Error(`domain value "${opts.guardKey}" conflicts with the registry guard key`)
 
-    statements.push(createExportedTypeAlias(typeName, sortedDomain))
-    statements.push(
-        f.createExportDefault(registryNodeExpression(registryTree(S, best), typeName, parameterName, guardKey)),
-    )
+    if (opts.defineType) statements.push(createExportedTypeAlias(opts.typeName, sortedDomain))
+    statements.push(f.createExportDefault(registryNodeExpression(opts, registryTree(S, best))))
 
     return printStatements(statements)
 }
@@ -38,22 +39,20 @@ export function tsGuardModule<S extends string>(
     S: readonly S[],
     targetValues: readonly S[],
     expr: Expr,
-    typeName: string,
-    parameterName = 's',
+    opts: EmitOptions,
 ): string {
     const sortedDomain = [...S].sort()
     const sortedTarget = [...targetValues].sort()
-    const statements: tsc.Statement[] = [
-        createExportedTypeAlias(typeName, sortedDomain),
+    const statements: tsc.Statement[] = opts.defineType ? [createExportedTypeAlias(opts.typeName, sortedDomain)] : []
+    statements.push(
         f.createExportDefault(
             createTypeGuard({
-                typeName,
-                parameterName,
+                opts,
                 narrowedValues: sortedTarget,
-                body: compile.expr2ts(expr, parameterName),
+                body: compile.expr2ts(expr, opts.parameterName),
             }),
         ),
-    ]
+    )
 
     return printStatements(statements)
 }
@@ -80,35 +79,24 @@ function registryTree<S extends string>(S: readonly S[], best: Map<Mask, Expr>):
     return root
 }
 
-function registryNodeExpression(
-    node: RegistryNode,
-    typeName: string,
-    parameterName: string,
-    guardKey: string,
-): tsc.Expression {
+function registryNodeExpression(opts: EmitModuleOptions, node: RegistryNode): tsc.Expression {
     const properties: tsc.ObjectLiteralElementLike[] = []
 
     if (node.guard !== undefined) {
         properties.push(
             f.createPropertyAssignment(
-                f.createStringLiteral(guardKey),
+                f.createStringLiteral(opts.guardKey),
                 createTypeGuard({
-                    typeName,
-                    parameterName,
+                    opts,
                     narrowedValues: node.guard.names,
-                    body: compile.expr2ts(node.guard.expr, parameterName),
+                    body: compile.expr2ts(node.guard.expr, opts.parameterName),
                 }),
             ),
         )
     }
 
     for (const [key, child] of [...node.children].sort(([a], [b]) => a.localeCompare(b))) {
-        properties.push(
-            f.createPropertyAssignment(
-                f.createStringLiteral(key),
-                registryNodeExpression(child, typeName, parameterName, guardKey),
-            ),
-        )
+        properties.push(f.createPropertyAssignment(f.createStringLiteral(key), registryNodeExpression(opts, child)))
     }
 
     return f.createObjectLiteralExpression(properties, true)
@@ -124,22 +112,21 @@ function createExportedTypeAlias(name: string, values: readonly string[]): tsc.T
 }
 
 function createTypeGuard(args: {
-    typeName: string
-    parameterName: string
+    opts: EmitOptions
     narrowedValues: readonly string[]
     body: tsc.Expression
 }): tsc.ArrowFunction {
     const parameter = f.createParameterDeclaration(
         undefined,
         undefined,
-        args.parameterName,
+        args.opts.parameterName,
         undefined,
-        f.createTypeReferenceNode(args.typeName),
+        f.createTypeReferenceNode(args.opts.typeName),
     )
 
     const returnType = f.createTypePredicateNode(
         undefined,
-        args.parameterName,
+        args.opts.parameterName,
         unionOfStringLiterals(args.narrowedValues),
     )
 

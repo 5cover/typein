@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@prettier/html-tags':
+        specifier: ^2.2.0
+        version: 2.2.0
       known-css-properties:
         specifier: ^0.37.0
         version: 0.37.0
@@ -28,6 +31,9 @@ packages:
     resolution: {integrity: sha512-yeJlba62xqmkgELUsn7356MEnzLLu/fw2x4lofFqGnXh6YysRdEs2BaLeLtg1+KU0AXvMeqQvTTp+3hBEBK+EA==}
     peerDependencies:
       commander: ~15.0.0
+
+  '@prettier/html-tags@2.2.0':
+    resolution: {integrity: sha512-6qLjt8ncestmSfEOeVf/kX5VhkinUsppybvkwn1X7wu+BjQ/GBSZYu7cytxdCvi5BaljCGIAr4rmfL5zVqdgyQ==}
 
   '@types/node@25.6.0':
     resolution: {integrity: sha512-+qIYRKdNYJwY3vRCZMdJbPLJAtGjQBudzZzdzwQYkEPQd+PJGixUL5QfvCLDaULoLv+RhT3LDkwEfKaAkgSmNQ==}
@@ -52,6 +58,8 @@ snapshots:
   '@commander-js/extra-typings@15.0.0(commander@15.0.0)':
     dependencies:
       commander: 15.0.0
+
+  '@prettier/html-tags@2.2.0': {}
 
   '@types/node@25.6.0':
     dependencies:

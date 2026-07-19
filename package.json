@@ -21,6 +21,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
+    "@prettier/html-tags": "^2.2.0",
     "known-css-properties": "^0.37.0"
   }
 }

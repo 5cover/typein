@@ -1,15 +1,16 @@
 import { all } from 'known-css-properties'
-
+import { htmlTags, htmlVoidTags } from '@prettier/html-tags'
+const css = all.filter(p => p[0] != '-')
 export const builtinDomains = {
     typeof: ['bigint', 'boolean', 'function', 'number', 'object', 'string', 'symbol', 'undefined'],
     'http-methods': ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'CONNECT', 'OPTIONS', 'TRACE', 'PATCH'],
     weekdays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
-    'css-properties': all,
-    'css-properties-50': all.slice(0, 50),
-    'css-properties-100': all.slice(0, 100),
-    'css-properties-250': all.slice(0, 250),
-    'css-properties-500': all.slice(0, 500),
-    'css-properties-1000': all.slice(0, 1000),
+    'css-properties': css,
+    'css-properties-50': css.slice(0, 50),
+    'css-properties-100': css.slice(0, 100),
+    'css-properties-250': css.slice(0, 250),
+    'css-properties-500': css.slice(0, 500),
+    'css-properties-1000': css.slice(0, 1000),
     months: [
         'January',
         'February',
@@ -24,7 +25,19 @@ export const builtinDomains = {
         'November',
         'December',
     ],
-    'json-token-types': ['brace-open', 'brace-close', 'bracket-open', 'bracket-close', 'colon', 'comma', 'string', 'number', 'true', 'false', 'null'],
+    'json-token-types': [
+        'brace-open',
+        'brace-close',
+        'bracket-open',
+        'bracket-close',
+        'colon',
+        'comma',
+        'string',
+        'number',
+        'true',
+        'false',
+        'null',
+    ],
     'some-css-properties': [
         'color',
         'display',
@@ -39,7 +52,7 @@ export const builtinDomains = {
         'height',
         'transform',
     ],
-    'html-tags': ['a', 'body', 'button', 'canvas', 'div', 'form', 'h1', 'head', 'html', 'img', 'input', 'label', 'li', 'main', 'p', 'script'],
+    'html-tags': [...htmlTags, ...htmlVoidTags],
     'log-levels': ['trace', 'debug', 'info', 'notice', 'warn', 'error', 'fatal'],
     'mime-types': [
         'application/octet-stream',

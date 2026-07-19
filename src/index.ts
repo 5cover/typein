@@ -2,7 +2,14 @@
 
 import { Command, InvalidArgumentError, Option, type OptionValues } from '@commander-js/extra-typings'
 import * as emit from './emit.js'
-import { defaultQueryFeatures, defaultQueryLimits, solve, solveQuery, type QueryFeatures, type QueryLimits } from './solve.js'
+import {
+    defaultQueryFeatures,
+    defaultQueryLimits,
+    solve,
+    solveQuery,
+    type QueryFeatures,
+    type QueryLimits,
+} from './solve.js'
 import { costComparators, printExpression, sourceLength } from './cost.js'
 import { coverageReport, interestReport, profileReport, queryProfileReport, queryReport } from './report.js'
 import { verifyQuery, verifyResult } from './eval.js'
@@ -12,83 +19,106 @@ import { performance } from 'node:perf_hooks'
 const supportedLanguages = ['ts'] as const
 const supportedCosts = ['source'] as const
 
-const program = new Command()
-    .name('typein')
+const program = new Command('typein')
     .description('Generate TypeScript type guards for string domains')
-    .option('--list-builtins', 'list builtin domain names')
-    .action(opts => {
-        if (opts.listBuiltins) listBuiltins()
-        program.help()
+    .addOption(
+        new Option('-b, --builtin <name>', 'add strings from a builtin domain')
+            .choices(builtinDomainNames)
+            .argParser((name, previous: BuiltinDomainName[] = []) => [...previous, name as BuiltinDomainName]),
+    )
+    .option('-d, --domain <value>', 'add one string to the input domain', collect)
+    .addOption(
+        new Option('-l, --language <language>', 'output language').choices(supportedLanguages).default('ts' as const),
+    )
+    .addOption(
+        new Option('--cost <name>', 'cost comparison function').choices(supportedCosts).default('source' as const),
+    )
+    .option('--report', 'write search reporting to stderr')
+    .option('--profile', 'write timing and search profile to stderr')
+    .option('--test', 'verify generated expressions against their promised partition')
+    .option('--type-name <name>', 'generated TypeScript union name', 'Domain')
+    .option('--define-type', 'Also define the domain type in input')
+    .option('--parameter-name <name>', 'generated predicate parameter name', 's')
+
+program
+    .command('list-builtins')
+    .description('list builtin domain names')
+    .action(() => {
+        for (const name of builtinDomainNames) console.log(name)
     })
 
-const allCommand = addCommonOptions(
-    new Command('all')
-        .description('emit guards for every non-empty, non-full partition')
-        .option('--guard-key <name>', 'registry leaf key for type guards', 'is'),
-).action(opts => {
-    runAll(opts as unknown as CommonOptions & { guardKey: string })
-})
+program
+    .command('domain')
+    .description('output domain values')
+    .action((_, c) => {
+        const domain = resolveDomain(c.optsWithGlobals())
+        console.log(domain.join('\n'))
+        console.error('size:', domain.length)
+    })
 
-const forCommand = addQueryOptions(
-    addCommonOptions(new Command('for').description('emit a guard for one target partition').argument('<targetValues...>')),
-).action((targetValues, opts) => {
-    runFor(targetValues, opts as unknown as CommonOptions & QueryOptionValues)
-})
+program
+    .command('all')
+    .description('emit guards for every non-empty, non-full partition')
+    .option('--guard-key <name>', 'registry leaf key for type guards', 'is')
+    .action((_, c) => runAll(c.optsWithGlobals()))
 
-const benchCssQueryCommand = addQueryOptions(
-    new Command('bench-css-query')
-        .description('run the CSS query benchmark ladder')
-        .option('--report', 'write per-run query family reporting to stderr')
-        .option('--profile', 'write per-run timing and search profile to stderr')
-        .option('--test', 'verify each synthesized expression against the CSS property domain'),
-).action(opts => {
-    runBenchCssQuery(opts as unknown as BenchOptions & QueryOptionValues)
-})
+queryCommand('for')
+    .description('emit a guard for one target partition')
+    .argument('<targetValues...>')
+    .action((targetValues, _, c) => runFor(targetValues, c.optsWithGlobals()))
 
-program.addCommand(allCommand)
-program.addCommand(forCommand)
-program.addCommand(benchCssQueryCommand)
+queryCommand('bench-css-query')
+    .description('run the CSS query benchmark ladder')
+    .action((_, c) => runBenchCssQuery(c.optsWithGlobals()))
 
-function addCommonOptions<Args extends any[], Opts extends OptionValues, GlobalOpts extends OptionValues>(
-    command: Command<Args, Opts, GlobalOpts>,
-) {
-    return command
-        .addOption(builtinOption())
-        .option('-d, --domain <value>', 'add one string to the input domain', collect)
-        .option('--list-builtins', 'list builtin domain names')
-        .addOption(
-            new Option('-l, --language <language>', 'output language')
-                .choices(supportedLanguages)
-                .default('ts' as const),
+queryCommand('test')
+    .description('transient test')
+    .action((_, c) => {
+        const domain = builtinDomains['css-properties']
+        runFor(
+            domain.filter(
+                s =>
+                    (s.startsWith('margin-') || s.startsWith('padding-') || s.startsWith('inset-')) &&
+                    (s.endsWith('-start') || s.endsWith('-end')),
+            ),
+            { ...c.optsWithGlobals(), domain },
         )
-        .addOption(new Option('--cost <name>', 'cost comparison function').choices(supportedCosts).default('source' as const))
-        .option('--report', 'write search reporting to stderr')
-        .option('--profile', 'write timing and search profile to stderr')
-        .option('--test', 'verify generated expressions against their promised partition')
-        .option('--type-name <name>', 'generated TypeScript union name', 'Domain')
-        .option('--parameter-name <name>', 'generated predicate parameter name', 's')
-}
+    })
 
-function builtinOption(): Option {
-    return new Option('-b, --builtin <name>', 'add strings from a builtin domain')
-        .choices(builtinDomainNames)
-        .argParser((name, previous: BuiltinDomainName[] = []) => [...previous, name as BuiltinDomainName])
-}
-
-function addQueryOptions<Args extends any[], Opts extends OptionValues, GlobalOpts extends OptionValues>(
-    command: Command<Args, Opts, GlobalOpts>,
-) {
-    return command
-        .option('--query-or-states <count>', 'maximum OR-cover states to visit', parsePositiveInteger, defaultQueryLimits.orStates)
-        .option('--query-and-states <count>', 'maximum AND-filter states to visit', parsePositiveInteger, defaultQueryLimits.andStates)
+function queryCommand(name: string) {
+    return program
+        .command(name)
+        .option(
+            '--query-or-states <count>',
+            'maximum OR-cover states to visit',
+            parsePositiveInteger,
+            defaultQueryLimits.orStates,
+        )
+        .option(
+            '--query-and-states <count>',
+            'maximum AND-filter states to visit',
+            parsePositiveInteger,
+            defaultQueryLimits.andStates,
+        )
         .option(
             '--query-superset-pre-frontier <count>',
             'maximum superset atoms before dominance reduction',
             parsePositiveInteger,
             defaultQueryLimits.supersetPreFrontier,
         )
-        .option('--query-superset-frontier <count>', 'maximum superset atoms after dominance reduction', parsePositiveInteger, defaultQueryLimits.supersetFrontier)
-        .option('--query-dnf-frontier <count>', 'maximum superset atoms used for pairwise DNF terms', parsePositiveInteger, defaultQueryLimits.dnfFrontier)
+        .option(
+            '--query-superset-frontier <count>',
+            'maximum superset atoms after dominance reduction',
+            parsePositiveInteger,
+            defaultQueryLimits.supersetFrontier,
+        )
+        .option(
+            '--query-dnf-frontier <count>',
+            'maximum superset atoms used for pairwise DNF terms',
+            parsePositiveInteger,
+            defaultQueryLimits.dnfFrontier,
+        )
+        .option('--query-multiplier <n>', 'multiply all limit by this', parsePositiveInteger, 1)
         .option('--query-regex', 'allow regex-backed query candidates', defaultQueryFeatures.allowRegex)
 }
 
@@ -98,19 +128,13 @@ function collect(value: string, previous: string[] = []): string[] {
 
 function parsePositiveInteger(value: string): number {
     const parsed = Number(value)
-    if (!Number.isSafeInteger(parsed) || parsed < 1) throw new InvalidArgumentError(`expected a positive integer, got "${value}"`)
+    if (!Number.isSafeInteger(parsed) || parsed < 1)
+        throw new InvalidArgumentError(`expected a positive integer, got "${value}"`)
     return parsed
 }
 
-function listBuiltins(): never {
-    for (const name of builtinDomainNames) process.stdout.write(`${name}\n`)
-    process.exit(0)
-}
-
 function runAll(opts: CommonOptions & { guardKey: string }) {
-    if (opts.listBuiltins) listBuiltins()
-
-    const domain = resolveDomain(opts.builtin ?? [], opts.domain ?? [])
+    const domain = resolveDomain(opts)
     validateEnumeratedDomain(domain, opts.guardKey)
 
     const totalStart = performance.now()
@@ -151,7 +175,7 @@ function runAll(opts: CommonOptions & { guardKey: string }) {
     switch (opts.language) {
         case 'ts': {
             const emitStart = performance.now()
-            process.stdout.write(emit.tsModule(domain, result.best, opts.typeName, opts.parameterName, opts.guardKey))
+            process.stdout.write(emit.tsModule(domain, result.best, opts))
             emitMs = performance.now() - emitStart
             break
         }
@@ -171,15 +195,19 @@ function runAll(opts: CommonOptions & { guardKey: string }) {
 }
 
 function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOptionValues) {
-    if (opts.listBuiltins) listBuiltins()
-
-    const domain = resolveDomain(opts.builtin ?? [], opts.domain ?? [])
+    const domain = resolveDomain(opts)
     const targets = unique(targetValues)
     validateQuery(domain, targets)
 
     const totalStart = performance.now()
     const solveStart = performance.now()
-    const result = solveQuery(domain, targets, costComparators[opts.cost], queryLimitsFromOptions(opts), queryFeaturesFromOptions(opts))
+    const result = solveQuery(
+        domain,
+        targets,
+        costComparators[opts.cost],
+        queryLimitsFromOptions(opts),
+        queryFeaturesFromOptions(opts),
+    )
     const solveMs = performance.now() - solveStart
 
     let reportMs = 0
@@ -198,9 +226,11 @@ function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOpti
         verifyMs = performance.now() - verifyStart
         if (failure !== undefined) {
             process.stderr.write(
-                [`query verified incorrectly`, `  expected: ${failure.expected.join(', ')}`, `  actual:   ${failure.actual.join(', ')}`].join(
-                    '\n',
-                ) + '\n',
+                [
+                    `query verified incorrectly`,
+                    `  expected: ${failure.expected.join(', ')}`,
+                    `  actual:   ${failure.actual.join(', ')}`,
+                ].join('\n') + '\n',
             )
             process.exitCode = 1
         } else {
@@ -211,7 +241,7 @@ function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOpti
     switch (opts.language) {
         case 'ts': {
             const emitStart = performance.now()
-            process.stdout.write(emit.tsGuardModule(domain, targets, result.expr, opts.typeName, opts.parameterName))
+            process.stdout.write(emit.tsGuardModule(domain, targets, result.expr, opts))
             emitMs = performance.now() - emitStart
             break
         }
@@ -241,7 +271,13 @@ function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
         for (;;) {
             const totalStart = performance.now()
             const solveStart = performance.now()
-            const result = solveQuery(domain, benchmark.targets, costComparators.source, limits, queryFeaturesFromOptions(opts))
+            const result = solveQuery(
+                domain,
+                benchmark.targets,
+                costComparators.source,
+                limits,
+                queryFeaturesFromOptions(opts),
+            )
             const solveMs = performance.now() - solveStart
             const totalMs = performance.now() - totalStart
             const fallbackCost = fallbackSourceLength(benchmark.targets)
@@ -303,12 +339,12 @@ function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
 type CommonOptions = {
     builtin?: BuiltinDomainName[]
     domain?: string[]
-    listBuiltins?: boolean
     language: 'ts'
     cost: 'source'
     report?: boolean
     profile?: boolean
     test?: boolean
+    defineType?: boolean
     typeName: string
     parameterName: string
 }
@@ -320,15 +356,17 @@ type QueryOptionValues = {
     querySupersetFrontier: number
     queryDnfFrontier: number
     queryRegex: boolean
+    queryMultiplier: number
 }
 
 function queryLimitsFromOptions(opts: QueryOptionValues): QueryLimits {
+    const m = opts.queryMultiplier
     return {
-        orStates: opts.queryOrStates,
-        andStates: opts.queryAndStates,
-        supersetPreFrontier: opts.querySupersetPreFrontier,
-        supersetFrontier: opts.querySupersetFrontier,
-        dnfFrontier: opts.queryDnfFrontier,
+        orStates: m * opts.queryOrStates,
+        andStates: m * opts.queryAndStates,
+        supersetPreFrontier: m * opts.querySupersetPreFrontier,
+        supersetFrontier: m * opts.querySupersetFrontier,
+        dnfFrontier: m * opts.queryDnfFrontier,
     }
 }
 
@@ -338,18 +376,19 @@ function queryFeaturesFromOptions(opts: QueryOptionValues): QueryFeatures {
     }
 }
 
-function resolveDomain(builtins: readonly BuiltinDomainName[], explicitValues: readonly string[]): string[] {
-    const parts: string[] =
-        builtins.length === 0 && explicitValues.length === 0
-            ? [...builtinDomains.typeof]
-            : [...builtins.flatMap(name => builtinDomains[name]), ...explicitValues]
-
-    return unique(parts)
+function resolveDomain(opts: CommonOptions): string[] {
+    const values: string[] = [
+        ...(opts.builtin?.length ? opts.builtin.flatMap(name => builtinDomains[name]) : []),
+        ...(opts.domain?.length ? opts.domain : []),
+    ]
+    return values.length ? unique(values) : [...builtinDomains.typeof]
 }
 
 function validateEnumeratedDomain(domain: readonly string[], guardKey: string) {
     if (domain.includes(guardKey)) {
-        program.error(`domain value "${guardKey}" conflicts with the generated registry guard key; use --guard-key to choose another key`)
+        program.error(
+            `domain value "${guardKey}" conflicts with the generated registry guard key; use --guard-key to choose another key`,
+        )
     }
 
     if (domain.length > 30) {
@@ -391,7 +430,14 @@ const cssQueryBenchmarks = [
     },
     {
         name: 'inline margin padding',
-        targets: ['margin-inline', 'margin-inline-start', 'margin-inline-end', 'padding-inline', 'padding-inline-start', 'padding-inline-end'],
+        targets: [
+            'margin-inline',
+            'margin-inline-start',
+            'margin-inline-end',
+            'padding-inline',
+            'padding-inline-start',
+            'padding-inline-end',
+        ],
     },
     {
         name: 'wide scatter',
@@ -439,7 +485,13 @@ function doubleQueryLimits(limits: QueryLimits): QueryLimits {
 }
 
 function limitsLabel(limits: QueryLimits): string {
-    return [limits.orStates, limits.andStates, limits.supersetPreFrontier, limits.supersetFrontier, limits.dnfFrontier].join('/')
+    return [
+        limits.orStates,
+        limits.andStates,
+        limits.supersetPreFrontier,
+        limits.supersetFrontier,
+        limits.dnfFrontier,
+    ].join('/')
 }
 
 function formatMs(value: number): string {
