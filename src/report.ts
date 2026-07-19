@@ -121,6 +121,7 @@ export function queryReport(domain: readonly string[], result: QueryResult): str
                 ['expression', code(printExpression(result.expr, 's'))],
             ],
         ),
+        queryFamilyTable(result),
     ].join('\n')
 }
 
@@ -152,6 +153,11 @@ export function queryProfileReport(result: QueryResult, cli: CliProfile): string
                 ['superset candidates', solve.supersetCandidates.toString()],
                 ['OR states', solve.orStates.toString()],
                 ['AND states', solve.andStates.toString()],
+                ['OR state limit hit', solve.orStateLimitHit ? 'yes' : 'no'],
+                ['AND state limit hit', solve.andStateLimitHit ? 'yes' : 'no'],
+                ['frontier truncations', solve.frontierTruncations.toString()],
+                ['frontier input', solve.frontierInput.toString()],
+                ['frontier kept', solve.frontierKept.toString()],
                 ['DNF terms attempted', solve.dnfTermsAttempted.toString()],
                 ['target candidates', solve.compositionAttempts.toString()],
                 ['lower-bound skips', solve.compositionPruned.toString()],
@@ -161,6 +167,32 @@ export function queryProfileReport(result: QueryResult, cli: CliProfile): string
                 ['target found', solve.targetFound ? 'yes' : 'no'],
                 ['proof', solve.proof],
             ],
+        ),
+        queryFamilyTable(result),
+    ].join('\n')
+}
+
+function queryFamilyTable(result: QueryResult): string {
+    const rows = [...result.familyStats.values()]
+        .sort((a, b) => a.family.localeCompare(b.family))
+        .map(stats => [
+            stats.family,
+            stats.candidates.toString(),
+            stats.costPruned.toString(),
+            stats.exact.toString(),
+            stats.subset.toString(),
+            stats.superset.toString(),
+            stats.unrelated.toString(),
+            stats.retainedSubset.toString(),
+            stats.retainedSuperset.toString(),
+            stats.improvements.toString(),
+        ])
+
+    return [
+        '## Query Families',
+        markdownTable(
+            ['family', 'candidates', 'cost-pruned', 'exact', 'subset', 'superset', 'unrelated', 'kept subset', 'kept superset', 'improvements'],
+            rows,
         ),
     ].join('\n')
 }

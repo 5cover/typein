@@ -90,6 +90,11 @@ export type QueryProfile = SolveProfile & {
     supersetCandidates: number
     orStates: number
     andStates: number
+    orStateLimitHit: boolean
+    andStateLimitHit: boolean
+    frontierTruncations: number
+    frontierInput: number
+    frontierKept: number
     dnfTermsAttempted: number
     proof: 'query-normal-forms' | 'bounded-query-normal-forms'
 }
@@ -98,6 +103,20 @@ export type QueryResult = {
     expr: Expr
     profile: QueryProfile
     targetValues: readonly string[]
+    familyStats: Map<FamilyId, QueryFamilyStats>
+}
+
+export type QueryFamilyStats = {
+    family: FamilyId
+    candidates: number
+    costPruned: number
+    exact: number
+    subset: number
+    superset: number
+    unrelated: number
+    retainedSubset: number
+    retainedSuperset: number
+    improvements: number
 }
 
 export function solve<const Domain extends string>(
@@ -669,6 +688,11 @@ export function solveQuery<const Domain extends string>(
         supersetCandidates: 0,
         orStates: 0,
         andStates: 0,
+        orStateLimitHit: false,
+        andStateLimitHit: false,
+        frontierTruncations: 0,
+        frontierInput: 0,
+        frontierKept: 0,
         dnfTermsAttempted: 0,
         proof: 'query-normal-forms',
     }
@@ -678,6 +702,7 @@ export function solveQuery<const Domain extends string>(
     let proof: QueryProfile['proof'] = 'query-normal-forms'
     const subsetAtoms = new Map<BigMask, QueryAtom>()
     const supersetAtoms = new Map<BigMask, QueryAtom>()
+    const familyStats = new Map<FamilyId, QueryFamilyStats>()
 
     const primitiveStart = performance.now()
     for (const candidate of targetCandidates()) considerPrimitive(candidate)
@@ -701,42 +726,59 @@ export function solveQuery<const Domain extends string>(
 
     const finalizeStart = performance.now()
     profile.finalizeMs = performance.now() - finalizeStart
-    return { expr: best, profile, targetValues }
+    return { expr: best, profile, targetValues, familyStats }
 
     function considerPrimitive(candidate: BigCandidate): void {
+        const stats = queryStatsFor(candidate.source.family)
         profile.primitiveCandidates++
+        stats.candidates++
         if (sourceLength(candidate.expr) >= bestCost) {
             profile.primitiveDiscarded++
+            stats.costPruned++
             return
         }
 
-        considerAtom(candidate.mask, candidate.expr)
+        considerAtom(candidate.mask, candidate.expr, stats)
 
         if (isUsefulIntermediate(candidate.mask)) {
+            const complementStats = queryStatsFor('not')
+            complementStats.candidates++
             const complementExpr = queryComplementExpr(candidate)
-            if (sourceLength(complementExpr) < bestCost) considerAtom(fullMask ^ candidate.mask, complementExpr)
+            if (sourceLength(complementExpr) < bestCost) {
+                considerAtom(fullMask ^ candidate.mask, complementExpr, complementStats)
+            } else {
+                complementStats.costPruned++
+            }
         }
     }
 
-    function considerAtom(mask: BigMask, expr: Expr): void {
+    function considerAtom(mask: BigMask, expr: Expr, stats: QueryFamilyStats): void {
         if (mask === targetMask) {
             profile.exactCandidates++
-            improve(expr)
+            stats.exact++
+            if (improve(expr)) stats.improvements++
             return
         }
 
         let retained = false
         if (isStrictTargetSubset(mask)) {
             profile.subsetCandidates++
+            stats.subset++
             retained = retainCheapest(subsetAtoms, mask, expr)
+            if (retained) stats.retainedSubset++
         }
 
         if (isStrictTargetSuperset(mask)) {
             profile.supersetCandidates++
+            stats.superset++
             retained = retainCheapest(supersetAtoms, mask, expr) || retained
+            if (retained) stats.retainedSuperset++
         }
 
-        if (!retained) profile.primitiveDiscarded++
+        if (!retained) {
+            profile.primitiveDiscarded++
+            if (!isStrictTargetSubset(mask) && !isStrictTargetSuperset(mask)) stats.unrelated++
+        }
     }
 
     function improve(expr: Expr | undefined): boolean {
@@ -786,6 +828,9 @@ export function solveQuery<const Domain extends string>(
         if (atoms.length <= maxSize) return [...atoms]
 
         proof = 'bounded-query-normal-forms'
+        profile.frontierTruncations++
+        profile.frontierInput += atoms.length
+        profile.frontierKept += maxSize
         return [...atoms]
             .sort((a, b) => falsePositiveCount(a.mask) - falsePositiveCount(b.mask) || a.cost - b.cost || exprCostCompare(a.expr, b.expr))
             .slice(0, maxSize)
@@ -809,6 +854,7 @@ export function solveQuery<const Domain extends string>(
             profile.orStates++
             if (profile.orStates > 200) {
                 proof = 'bounded-query-normal-forms'
+                profile.orStateLimitHit = true
                 return undefined
             }
             if (state.mask === targetMask && state.expr !== undefined) return state
@@ -863,6 +909,7 @@ export function solveQuery<const Domain extends string>(
             profile.andStates++
             if (profile.andStates > 200) {
                 proof = 'bounded-query-normal-forms'
+                profile.andStateLimitHit = true
                 return undefined
             }
             if (state.mask === targetMask && state.expr !== undefined) return state
@@ -942,6 +989,26 @@ export function solveQuery<const Domain extends string>(
 
     function falsePositiveCount(mask: BigMask): number {
         return popcountBig(mask & ~targetMask)
+    }
+
+    function queryStatsFor(family: FamilyId): QueryFamilyStats {
+        const current = familyStats.get(family)
+        if (current !== undefined) return current
+
+        const stats: QueryFamilyStats = {
+            family,
+            candidates: 0,
+            costPruned: 0,
+            exact: 0,
+            subset: 0,
+            superset: 0,
+            unrelated: 0,
+            retainedSubset: 0,
+            retainedSuperset: 0,
+            improvements: 0,
+        }
+        familyStats.set(family, stats)
+        return stats
     }
 
     function queryComplementExpr(candidate: BigCandidate): Expr {
