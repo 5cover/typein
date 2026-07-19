@@ -169,7 +169,7 @@ export const printer = tsc.createPrinter({
 export const sourceFile = tsc.createSourceFile('generated.ts', '', tsc.ScriptTarget.Latest, false, tsc.ScriptKind.TS)
 function printStatements(statements: readonly tsc.Statement[]): string {
     const file = f.updateSourceFile(sourceFile, [...statements])
-    return printer.printFile(file)
+    return printer.printFile(file).replaceAll(/^ +/gm, '') // remove indent
 }
 
 function compareStringArrays(left: readonly string[], right: readonly string[]): number {

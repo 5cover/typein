@@ -104,6 +104,17 @@ Useful options:
 
 Builtin domains are intended both as examples and stress inputs. Use `typein for` for larger domains; `typein all` is intentionally exhaustive and can still be expensive. The full `css-properties` builtin contains the known CSS properties list; sliced variants such as `css-properties-50`, `css-properties-100`, `css-properties-250`, `css-properties-500`, and `css-properties-1000` are available for profiling.
 
+CSS-like hyphenated domains get extra query primitives. Typein derives delimiter presence, token count, first/last/middle/any-token masks, and anchored token-pattern regexes from the requested target values. These patterns are still verified against the full finite domain, so a generated regex is correct for the supplied universe rather than a claim about arbitrary strings.
+
+The CSS query benchmark ladder can be run with:
+
+```sh
+typein bench-css-query --test
+typein bench-css-query --report --profile --test
+```
+
+The benchmark starts at the configured query limits. If a rung still emits the equality-OR fallback, it retries with doubled limits until the expression improves or one run takes more than ten seconds.
+
 For large query domains, `--profile` distinguishes exact correctness from search proof scope. `proof: query-normal-forms` means the target normal-form searches were exhausted. `proof: bounded-query-normal-forms` means the emitted guard was verified over the full domain, but the normal-form optimality search used a bounded frontier.
 
 `typein for` exposes query search limits when you want to spend more time trying to beat the exact-value fallback:
