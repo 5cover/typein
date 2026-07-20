@@ -1,4 +1,4 @@
-import tsc, { EmitHint } from 'typescript'
+import tsc from 'typescript'
 import { builtinDomains } from './domains.js'
 import { solveQuery, type QueryFeatures, type QueryLimits } from './solve.js'
 import { compactJsCostCode, printCompactJsExpression, type costComparators } from './cost.js'
@@ -9,7 +9,6 @@ import type { Expr } from './ir.js'
 import type { Mask } from './types.js'
 import { computeMask, maskToNames } from './mask.js'
 import { counted } from './report.js'
-import { compactJsExpression } from './js-minify.js'
 
 const f = tsc.factory
 const typeofDomain = builtinDomains.typeof
@@ -172,7 +171,7 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         const original = source.slice(start, end)
         const mask = maskFor(analysis.target)
         const expressionNode = expressionFor(analysis, mask)
-        const emittedExpression = compactJsExpression(printExpressionNode(expressionNode)).replaceAll(
+        const emittedExpression = printExpressionNode(expressionNode, { format: 'minified' }).replaceAll(
             rootPlaceholder,
             `(${analysis.root.getText(sourceFile)})`,
         )
@@ -515,8 +514,8 @@ function partitionLabel(mask: Mask): string {
     return maskToNames(typeofDomain, mask).join(' ') || '<empty>'
 }
 
-function printExpressionNode(node: tsc.Expression): string {
-    return emit.printer.printNode(EmitHint.Expression, node, emit.sourceFile)
+function printExpressionNode(node: tsc.Expression, opts?: emit.ExpressionPrintOptions): string {
+    return emit.expressionNode(node, opts)
 }
 
 function cacheEntryReport(entry: CacheEntry) {

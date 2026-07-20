@@ -1,4 +1,5 @@
 import tsc from 'typescript'
+import { minify_sync } from 'terser'
 import { maskToNames } from './mask.js'
 import type { Mask } from './types.js'
 import * as compile from './compile.js'
@@ -21,6 +22,22 @@ export type EmitOptions = {
 }
 
 export type EmitModuleOptions = EmitOptions & { guardKey: string }
+
+export type ExpressionFormat = 'canonical' | 'minified'
+
+export type ExpressionPrintOptions = compile.ExprEmitOptions & {
+    format?: ExpressionFormat
+}
+
+export function expression(expr: Expr, variableOrOptions: string | ExpressionPrintOptions = 'x'): string {
+    const opts = typeof variableOrOptions === 'string' ? { variable: variableOrOptions } : variableOrOptions
+    return expressionNode(compile.expr2ts(expr, opts), opts)
+}
+
+export function expressionNode(node: tsc.Expression, opts: { format?: ExpressionFormat } = {}): string {
+    const code = printer.printNode(tsc.EmitHint.Expression, node, sourceFile)
+    return opts.format === 'minified' ? compactJsExpression(code) : code
+}
 
 export function tsModule<S extends string>(S: readonly S[], best: Map<Mask, Expr>, opts: EmitModuleOptions): string {
     const sortedDomain = [...S].sort()
@@ -157,6 +174,30 @@ export const sourceFile = tsc.createSourceFile('generated.ts', '', tsc.ScriptTar
 function printStatements(statements: readonly tsc.Statement[]): string {
     const file = f.updateSourceFile(sourceFile, [...statements])
     return printer.printFile(file).replaceAll(/^ +/gm, '') // remove indent
+}
+
+function compactJsExpression(expression: string): string {
+    const result = minify_sync(`${expression};`, {
+        compress: false,
+        mangle: false,
+        format: {
+            comments: false,
+        },
+    })
+
+    if (result.code === undefined) {
+        throw new Error('Terser did not return generated code')
+    }
+
+    return expressionStatementText(result.code)
+}
+
+function expressionStatementText(source: string): string {
+    const sourceFile = tsc.createSourceFile('typein-expression.js', source, tsc.ScriptTarget.Latest, true, tsc.ScriptKind.JS)
+    const statement = sourceFile.statements[0]
+    if (!statement || !tsc.isExpressionStatement(statement)) throw new Error('failed to read compacted expression')
+
+    return statement.expression.getText(sourceFile)
 }
 
 function compareStringArrays(left: readonly string[], right: readonly string[]): number {

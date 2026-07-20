@@ -1,10 +1,11 @@
-import { EmitHint } from 'typescript'
-import { expr2ts } from './compile.js'
 import * as emit from './emit.js'
+import { expr2ts } from './compile.js'
 import type { Expr } from './ir.js'
-import { compactJsExpression } from './js-minify.js'
 
-export type CostCompare = (a: Expr, b: Expr) => number
+export type CostCompare = {
+    (a: Expr, b: Expr): number
+    value?: (expr: Expr) => number
+}
 
 export const costComparators = {
     source: costCode,
@@ -51,19 +52,22 @@ export function compactJsSourceLength(expr: Expr): number {
     return compactJsSourceCost(expr).code.length
 }
 
+costCode.value = sourceLength
+compactJsCostCode.value = compactJsSourceLength
+
 export function printExpression(expr: Expr, variable = 'x'): string {
     if (variable === 'x') return sourceCost(expr).code
-    return emit.printer.printNode(EmitHint.Expression, expr2ts(expr, variable), emit.sourceFile)
+    return emit.expression(expr, variable)
 }
 
 export function printCompactJsExpression(expr: Expr, variable = 'x'): string {
-    const node = expr2ts(expr, {
+    return emit.expression(expr, {
         variable,
         language: 'js',
         equality: 'loose',
         createNonNullExpressions: false,
+        format: 'minified',
     })
-    return compactJsExpression(emit.printer.printNode(EmitHint.Expression, node, emit.sourceFile))
 }
 
 type SourceCost = {
@@ -78,8 +82,8 @@ function sourceCost(expr: Expr): SourceCost {
     const cached = sourceCostCache.get(expr)
     if (cached !== undefined) return cached
 
+    const code = emit.expression(expr)
     const node = expr2ts(expr)
-    const code = emit.printer.printNode(EmitHint.Expression, node, emit.sourceFile)
     let tokenCount = 0
     node.forEachChild(
         () => tokenCount++,
@@ -95,12 +99,17 @@ function compactJsSourceCost(expr: Expr): SourceCost {
     const cached = compactJsSourceCostCache.get(expr)
     if (cached !== undefined) return cached
 
+    const code = emit.expression(expr, {
+        language: 'js',
+        equality: 'loose',
+        createNonNullExpressions: false,
+        format: 'minified',
+    })
     const node = expr2ts(expr, {
         language: 'js',
         equality: 'loose',
         createNonNullExpressions: false,
     })
-    const code = compactJsExpression(emit.printer.printNode(EmitHint.Expression, node, emit.sourceFile))
     let tokenCount = 0
     node.forEachChild(
         () => tokenCount++,

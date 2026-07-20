@@ -1,7 +1,7 @@
 import { invertLastPredicateInPlace, notExpr, type Expr } from './ir.js'
 import { computeMask } from './mask.js'
 import type { Mask } from './types.js'
-import { costCode, sourceLength } from './cost.js'
+import { costCode, sourceLength, type CostCompare } from './cost.js'
 import { performance } from 'node:perf_hooks'
 
 type RelationalOp = '<' | '<=' | '>' | '>='
@@ -168,7 +168,7 @@ export type QueryFamilyStats = {
 
 export function solve<const Domain extends string>(
     domain: readonly Domain[],
-    exprCostCompare: (a: Expr, b: Expr) => number,
+    exprCostCompare: CostCompare,
 ): SolveResult {
     const winners = new Map<Mask, Winner>()
     const familyStats = new Map<FamilyId, FamilyStats>()
@@ -728,7 +728,7 @@ type GoalSearchResult = QuerySearchResult & {
 export function solveQuery<const Domain extends string>(
     domain: readonly Domain[],
     targetValues: readonly Domain[],
-    exprCostCompare: (a: Expr, b: Expr) => number,
+    exprCostCompare: CostCompare,
     queryLimits: QueryLimits = defaultQueryLimits,
     queryFeatures: QueryFeatures = defaultQueryFeatures,
 ): QueryResult {
@@ -738,7 +738,7 @@ export function solveQuery<const Domain extends string>(
 function solveQueryCore<const Domain extends string>(
     domain: readonly Domain[],
     targetValues: readonly Domain[],
-    exprCostCompare: (a: Expr, b: Expr) => number,
+    exprCostCompare: CostCompare,
     queryLimits: QueryLimits,
     queryFeatures: QueryFeatures,
     includeDual: boolean,
@@ -783,7 +783,8 @@ function solveQueryCore<const Domain extends string>(
     }
     const fallback = targetValues.length > 1 ? oneOfExpr(targetValues) : exactSubsetExpr(targetValues)
     let best = fallback
-    let bestCost = sourceLength(fallback)
+    const exprCostValue = exprCostCompare.value ?? sourceLength
+    let bestCost = exprCostValue(fallback)
     let proof: QueryProfile['proof'] = 'query-normal-forms'
     const subsetAtoms = new Map<BigMask, QueryAtom>()
     const supersetAtoms = new Map<BigMask, QueryAtom>()
@@ -854,7 +855,7 @@ function solveQueryCore<const Domain extends string>(
         const stats = queryStatsFor(candidate.source.family)
         profile.primitiveCandidates++
         stats.candidates++
-        if (sourceLength(candidate.expr) >= bestCost) {
+        if (exprCostValue(candidate.expr) >= bestCost) {
             profile.primitiveDiscarded++
             stats.costPruned++
             return
@@ -866,7 +867,7 @@ function solveQueryCore<const Domain extends string>(
             const complementStats = queryStatsFor('not')
             complementStats.candidates++
             const complementExpr = queryComplementExpr(candidate)
-            if (sourceLength(complementExpr) < bestCost) {
+            if (exprCostValue(complementExpr) < bestCost) {
                 considerAtom(fullMask ^ candidate.mask, complementExpr, complementStats)
             } else {
                 complementStats.costPruned++
@@ -918,7 +919,7 @@ function solveQueryCore<const Domain extends string>(
         if (expr === undefined || exprCostCompare(expr, best) >= 0) return false
 
         best = expr
-        bestCost = sourceLength(expr)
+        bestCost = exprCostValue(expr)
         profile.compositionImprovements++
         return true
     }
@@ -927,7 +928,7 @@ function solveQueryCore<const Domain extends string>(
         const current = map.get(mask)
         if (current !== undefined && exprCostCompare(expr, current.expr) >= 0) return false
 
-        map.set(mask, { mask, expr, cost: sourceLength(expr) })
+        map.set(mask, { mask, expr, cost: exprCostValue(expr) })
         return true
     }
 
@@ -1004,7 +1005,7 @@ function solveQueryCore<const Domain extends string>(
                 }
 
                 const nextExpr: Expr = state.expr === undefined ? atom.expr : { type: 'or', left: state.expr, right: atom.expr }
-                const nextCost = sourceLength(nextExpr)
+                const nextCost = exprCostValue(nextExpr)
                 profile.compositionConsidered++
                 if (nextCost >= bound) continue
 
@@ -1059,7 +1060,7 @@ function solveQueryCore<const Domain extends string>(
                 }
 
                 const nextExpr: Expr = { type: 'and', left: state.expr!, right: atom.expr }
-                const nextCost = sourceLength(nextExpr)
+                const nextCost = exprCostValue(nextExpr)
                 profile.compositionConsidered++
                 if (nextCost >= bound) continue
 
@@ -1101,7 +1102,7 @@ function solveQueryCore<const Domain extends string>(
                 if (!isStrictTargetSubset(mask)) continue
 
                 const expr: Expr = i === j ? left.expr : { type: 'and', left: left.expr, right: right.expr }
-                if (sourceLength(expr) >= bound) continue
+                if (exprCostValue(expr) >= bound) continue
                 retainCheapest(terms, mask, expr)
             }
         }
@@ -1164,7 +1165,7 @@ function solveQueryCore<const Domain extends string>(
             if (lowerBound >= bound) continue
 
             const nextExpr: Expr = { type: 'and', left: state.expr!, right: atom.expr }
-            const nextCost = sourceLength(nextExpr)
+            const nextCost = exprCostValue(nextExpr)
             if (nextCost >= bound) continue
 
             const nextFalsePositives = falsePositiveCountForGoal(nextMask, goal)
@@ -1221,7 +1222,7 @@ function solveQueryCore<const Domain extends string>(
                 }
 
                 const nextExpr: Expr = { type: 'and', left: state.expr!, right: atom.expr }
-                const nextCost = sourceLength(nextExpr)
+                const nextCost = exprCostValue(nextExpr)
                 profile.compositionConsidered++
                 if (nextCost >= bound) continue
 
@@ -1276,7 +1277,7 @@ function solveQueryCore<const Domain extends string>(
                 }
 
                 const nextExpr: Expr = { type: 'and', left: state.expr!, right: atom.expr }
-                const nextCost = sourceLength(nextExpr)
+                const nextCost = exprCostValue(nextExpr)
                 profile.compositionConsidered++
                 if (nextCost >= bound) continue
 
