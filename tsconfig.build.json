@@ -6,7 +6,7 @@
     "outDir": "dist",
     "allowJs": false,
     "noEmit": false,
-    "declaration": true,
+    "declaration": false,
     "removeComments": true,
   },
   "include": [

@@ -148,7 +148,7 @@ function runAll(opts: CommonOptions & { guardKey: string }) {
 
     if (opts.report) {
         const reportStart = performance.now()
-        process.stderr.write(`${coverageReport(domain, result)}\n\n${interestReport(domain, result)}\n`)
+        console.error(`${coverageReport(domain, result)}\n\n${interestReport(domain, result)}`)
         reportMs = performance.now() - reportStart
     }
 
@@ -158,31 +158,31 @@ function runAll(opts: CommonOptions & { guardKey: string }) {
         verifyMs = performance.now() - verifyStart
         if (failures.length > 0) {
             for (const failure of failures) {
-                process.stderr.write(
+                console.error(
                     [
                         `mask ${failure.mask} verified as ${failure.actualMask}`,
                         `  expected: ${failure.expected.join(', ')}`,
                         `  actual:   ${failure.actual.join(', ')}`,
-                    ].join('\n') + '\n',
+                    ].join('\n'),
                 )
             }
             process.exitCode = 1
         } else {
-            process.stderr.write(`verified ${result.best.size} expressions against ${domain.length} inputs\n`)
+            console.error(`verified ${result.best.size} expressions against ${domain.length} inputs`)
         }
     }
 
     switch (opts.language) {
         case 'ts': {
             const emitStart = performance.now()
-            process.stdout.write(emit.tsModule(domain, result.best, opts))
+            console.log(emit.tsModule(domain, result.best, opts))
             emitMs = performance.now() - emitStart
             break
         }
     }
 
     if (opts.profile) {
-        process.stderr.write(
+        console.error(
             `${profileReport(result, {
                 totalMs: performance.now() - totalStart,
                 solveMs,
@@ -216,7 +216,7 @@ function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOpti
 
     if (opts.report) {
         const reportStart = performance.now()
-        process.stderr.write(`${queryReport(domain, result)}\n`)
+        console.error(queryReport(domain, result))
         reportMs = performance.now() - reportStart
     }
 
@@ -225,37 +225,37 @@ function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOpti
         const failure = verifyQuery(domain, targets, result.expr)
         verifyMs = performance.now() - verifyStart
         if (failure !== undefined) {
-            process.stderr.write(
+            console.error(
                 [
                     `query verified incorrectly`,
                     `  expected: ${failure.expected.join(', ')}`,
                     `  actual:   ${failure.actual.join(', ')}`,
-                ].join('\n') + '\n',
+                ].join('\n'),
             )
             process.exitCode = 1
         } else {
-            process.stderr.write(`verified query expression against ${domain.length} inputs\n`)
+            console.error(`verified query expression against ${domain.length} inputs`)
         }
     }
 
     switch (opts.language) {
         case 'ts': {
             const emitStart = performance.now()
-            process.stdout.write(emit.tsGuardModule(domain, targets, result.expr, opts))
+            console.log(emit.tsGuardModule(domain, targets, result.expr, opts))
             emitMs = performance.now() - emitStart
             break
         }
     }
 
     if (opts.profile) {
-        process.stderr.write(
-            `${queryProfileReport(result, {
+        console.error(
+            queryProfileReport(result, {
                 totalMs: performance.now() - totalStart,
                 solveMs,
                 reportMs,
                 verifyMs,
                 emitMs,
-            })}\n`,
+            }),
         )
     }
 }
@@ -284,28 +284,28 @@ function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
             const resultCost = sourceLength(result.expr)
             const improved = resultCost < fallbackCost
 
-            if (opts.report) process.stderr.write(`\n# ${benchmark.name}\n${queryReport(domain, result)}\n`)
+            if (opts.report) console.error(`\n# ${benchmark.name}\n${queryReport(domain, result)}`)
             if (opts.profile) {
-                process.stderr.write(
-                    `${queryProfileReport(result, {
+                console.error(
+                    queryProfileReport(result, {
                         totalMs,
                         solveMs,
                         reportMs: 0,
                         verifyMs: 0,
                         emitMs: 0,
-                    })}\n`,
+                    }),
                 )
             }
 
             if (opts.test) {
                 const failure = verifyQuery(domain, benchmark.targets, result.expr)
                 if (failure !== undefined) {
-                    process.stderr.write(
+                    console.error(
                         [
                             `benchmark "${benchmark.name}" verified incorrectly`,
                             `  expected: ${failure.expected.join(', ')}`,
                             `  actual:   ${failure.actual.join(', ')}`,
-                        ].join('\n') + '\n',
+                        ].join('\n'),
                     )
                     process.exitCode = 1
                 }
@@ -327,7 +327,7 @@ function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
         }
     }
 
-    process.stderr.write(
+    console.error(
         [
             '## CSS Query Benchmark',
             markdownTable(['query', 'targets', 'limits', 'ms', 'improved', 'proof', 'limit hit', 'expression'], rows),
