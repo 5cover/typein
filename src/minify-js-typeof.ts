@@ -8,7 +8,7 @@ import { applySourceEdits, selectNonOverlappingEdits, type SourceEdit } from './
 import type { Expr } from './ir.js'
 import type { Mask } from './types.js'
 import { computeMask, maskToNames } from './mask.js'
-import { markdownCode, markdownTable } from './markdown.js'
+import { counted } from './report.js'
 
 const f = tsc.factory
 const typeofDomain = builtinDomains.typeof
@@ -29,6 +29,23 @@ type TypeofAnalysis = {
     pure: boolean
     typeofCount: number
     kind: 'atom' | 'merged-logical'
+}
+
+type SourceLocation = {
+    line: number
+    column: number
+}
+
+type SourceSpan = SourceLocation & {
+    start: number
+    end: number
+    text: string
+}
+
+type RewriteCandidate = SourceEdit & {
+    source: SourceSpan
+    kind: TypeofAnalysis['kind']
+    partition: string
 }
 
 type CacheEntry = {
@@ -57,6 +74,23 @@ type Stats = {
     replacementsMade: number
     cacheHits: number
     cacheMisses: number
+}
+
+type JsTypeofReport = {
+    stats: Stats
+    typeofUsages: ReturnType<typeof counted<SourceSpan>>
+    comparisonAtoms: ReturnType<typeof counted<SourceSpan & { operand: string; pure: boolean; partition: string }>>
+    notProvenPureAtoms: ReturnType<typeof counted<SourceSpan & { operand: string; reason: string; partition: string }>>
+    logicalDecisions: {
+        pureMerged: ReturnType<typeof counted<SourceSpan & { operand: string; partition: string; typeofCount: number }>>
+        notProvenPureSplit: ReturnType<typeof counted<SourceSpan & { operand: string; reason: string }>>
+        mixedOperandSplit: ReturnType<typeof counted<SourceSpan & { leftOperand: string; rightOperand: string }>>
+        partialSkipped: ReturnType<typeof counted<SourceSpan>>
+    }
+    replacementCandidates: ReturnType<typeof counted<ReturnType<typeof replacementReport>>>
+    selectedReplacements: ReturnType<typeof counted<ReturnType<typeof replacementReport>>>
+    notShorter: ReturnType<typeof counted<SourceSpan & { replacement: string; partition: string; savedBytes: number }>>
+    expressions: ReturnType<typeof counted<ReturnType<typeof cacheEntryReport>>>
 }
 
 export const jsTypeofMinifier = {
@@ -88,21 +122,33 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
     }
     const cache = new Map<Mask, CacheEntry>()
     const solved = new Map<Mask, Expr>()
-    const candidates: SourceEdit[] = []
+    const candidates: RewriteCandidate[] = []
+    const typeofUsages: SourceSpan[] = []
+    const comparisonAtoms: (SourceSpan & { operand: string; pure: boolean; partition: string })[] = []
+    const notProvenPureAtoms: (SourceSpan & { operand: string; reason: string; partition: string })[] = []
+    const pureMerged: (SourceSpan & { operand: string; partition: string; typeofCount: number })[] = []
+    const notProvenPureSplit: (SourceSpan & { operand: string; reason: string })[] = []
+    const mixedOperandSplit: (SourceSpan & { leftOperand: string; rightOperand: string })[] = []
+    const partialSkipped: SourceSpan[] = []
+    const notShorter: (SourceSpan & { replacement: string; partition: string; savedBytes: number })[] = []
 
     visit(sourceFile)
 
     const edits = selectNonOverlappingEdits(candidates)
+    const selected = new Set(edits.map(editKey))
     stats.replacementsMade = edits.length
     const code = applySourceEdits(source, edits)
 
     return {
         code,
-        report: opts.report ? jsTypeofReport(stats, [...cache.values()]) : undefined,
+        report: opts.report ? jsTypeofReport() : undefined,
     }
 
     function visit(node: tsc.Node): void {
-        if (tsc.isTypeOfExpression(node)) stats.typeofUsages++
+        if (tsc.isTypeOfExpression(node)) {
+            stats.typeofUsages++
+            typeofUsages.push(spanFor(node))
+        }
 
         if (tsc.isExpression(node)) {
             const replacement = replacementFor(node)
@@ -112,7 +158,7 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         tsc.forEachChild(node, visit)
     }
 
-    function replacementFor(node: tsc.Expression): SourceEdit | undefined {
+    function replacementFor(node: tsc.Expression): RewriteCandidate | undefined {
         const analysis = analyzeExpression(node, true)
         if (analysis === undefined) return undefined
 
@@ -149,6 +195,12 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
 
         if (replacement.length >= original.length) {
             stats.notShorterSkipped++
+            notShorter.push({
+                ...spanFor(node),
+                replacement,
+                partition: partitionLabel(mask),
+                savedBytes: original.length - replacement.length,
+            })
             return undefined
         }
 
@@ -156,6 +208,9 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
             start,
             end,
             replacement,
+            source: spanFor(node),
+            kind: analysis.kind,
+            partition: partitionLabel(mask),
         }
     }
 
@@ -218,25 +273,52 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
 
             if (countStats) stats.logicalExpressions++
             if (left === undefined || right === undefined) {
-                if (countStats && (left !== undefined || right !== undefined)) stats.partialLogicalSkipped++
+                if (countStats && (left !== undefined || right !== undefined)) {
+                    stats.partialLogicalSkipped++
+                    partialSkipped.push(spanFor(node))
+                }
                 return undefined
             }
             if (left.rootText !== right.rootText) {
-                if (countStats) stats.mixedOperandLogicalSplit++
+                if (countStats) {
+                    stats.mixedOperandLogicalSplit++
+                    mixedOperandSplit.push({
+                        ...spanFor(node),
+                        leftOperand: left.rootText,
+                        rightOperand: right.rootText,
+                    })
+                }
                 return undefined
             }
             if (!left.pure || !right.pure) {
-                if (countStats) stats.notProvenPureLogicalSplit++
+                if (countStats) {
+                    stats.notProvenPureLogicalSplit++
+                    notProvenPureSplit.push({
+                        ...spanFor(node),
+                        operand: left.rootText,
+                        reason: pureFailureReason(skipParens(left.root.expression)),
+                    })
+                }
                 return undefined
             }
 
-            if (countStats) stats.pureLogicalMerged++
+            const target =
+                node.operatorToken.kind === tsc.SyntaxKind.BarBarToken
+                    ? union(left.target, right.target)
+                    : intersection(left.target, right.target)
+
+            if (countStats) {
+                stats.pureLogicalMerged++
+                pureMerged.push({
+                    ...spanFor(node),
+                    operand: left.rootText,
+                    partition: partitionLabel(maskFor(target)),
+                    typeofCount: left.typeofCount + right.typeofCount,
+                })
+            }
 
             return {
-                target:
-                    node.operatorToken.kind === tsc.SyntaxKind.BarBarToken
-                        ? union(left.target, right.target)
-                        : intersection(left.target, right.target),
+                target,
                 root: left.root,
                 rootText: left.rootText,
                 pure: true,
@@ -252,6 +334,20 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
             stats.comparisonAtoms++
             if (pure) stats.pureAtoms++
             else stats.notProvenPureAtoms++
+
+            const atom = {
+                ...spanFor(node),
+                operand: comparison.root.expression.getText(sourceFile),
+                pure,
+                partition: partitionLabel(maskFor(comparisonTarget(comparison.value, comparison.operator))),
+            }
+            comparisonAtoms.push(atom)
+            if (!pure) {
+                notProvenPureAtoms.push({
+                    ...atom,
+                    reason: pureFailureReason(skipParens(comparison.root.expression)),
+                })
+            }
         }
 
         return {
@@ -326,6 +422,50 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
 
         return replacement
     }
+
+    function jsTypeofReport(): JsTypeofReport {
+        return {
+            stats,
+            typeofUsages: counted(typeofUsages),
+            comparisonAtoms: counted(comparisonAtoms),
+            notProvenPureAtoms: counted(notProvenPureAtoms),
+            logicalDecisions: {
+                pureMerged: counted(pureMerged),
+                notProvenPureSplit: counted(notProvenPureSplit),
+                mixedOperandSplit: counted(mixedOperandSplit),
+                partialSkipped: counted(partialSkipped),
+            },
+            replacementCandidates: counted(candidates.map(replacementReport)),
+            selectedReplacements: counted(candidates.filter(candidate => selected.has(editKey(candidate))).map(replacementReport)),
+            notShorter: counted(notShorter),
+            expressions: counted([...cache.values()].sort((a, b) => a.mask - b.mask).map(cacheEntryReport)),
+        }
+    }
+
+    function spanFor(node: tsc.Node): SourceSpan {
+        const start = node.getStart(sourceFile)
+        const position = sourceFile.getLineAndCharacterOfPosition(start)
+        return {
+            start,
+            end: node.getEnd(),
+            line: position.line + 1,
+            column: position.character + 1,
+            text: source.slice(start, node.getEnd()),
+        }
+    }
+}
+
+function replacementReport(candidate: RewriteCandidate) {
+    return {
+        ...candidate.source,
+        replacement: candidate.replacement,
+        kind: candidate.kind,
+        partition: candidate.partition,
+    }
+}
+
+function editKey(edit: SourceEdit): string {
+    return `${edit.start}:${edit.end}:${edit.replacement}`
 }
 
 function comparisonTarget(
@@ -380,6 +520,17 @@ function partitionLabel(mask: Mask): string {
 
 function printExpressionNode(node: tsc.Expression): string {
     return emit.printer.printNode(EmitHint.Expression, node, emit.sourceFile)
+}
+
+function cacheEntryReport(entry: CacheEntry) {
+    return {
+        partition: partitionLabel(entry.mask),
+        expression: entry.expression,
+        uses: entry.uses,
+        originalBytes: entry.originalBytes,
+        replacementBytes: entry.replacementBytes,
+        savedBytes: entry.saved,
+    }
 }
 
 function needsBinaryOperandParens(parent: tsc.BinaryExpression, originalNode: tsc.Expression, replacementNode: tsc.Expression): boolean {
@@ -495,45 +646,24 @@ function isPureExpression(node: tsc.Expression): boolean {
     return false
 }
 
-function isAssignmentOperator(kind: tsc.SyntaxKind): boolean {
-    return kind >= tsc.SyntaxKind.FirstAssignment && kind <= tsc.SyntaxKind.LastAssignment
+function pureFailureReason(node: tsc.Expression): string {
+    node = skipParens(node)
+    if (tsc.isCallExpression(node)) return 'call expression'
+    if (tsc.isNewExpression(node)) return 'new expression'
+    if (tsc.isDeleteExpression(node)) return 'delete expression'
+    if (tsc.isAwaitExpression(node)) return 'await expression'
+    if (tsc.isYieldExpression(node)) return 'yield expression'
+    if (tsc.isPostfixUnaryExpression(node) || tsc.isPrefixUnaryExpression(node)) return tsc.tokenToString(node.operator) ?? 'unary expression'
+    if (tsc.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) return 'assignment expression'
+    if (tsc.isElementAccessExpression(node)) return pureFailureReason(node.argumentExpression)
+    if (tsc.isPropertyAccessExpression(node)) return pureFailureReason(node.expression)
+    if (tsc.isBinaryExpression(node)) {
+        if (!isPureExpression(node.left)) return pureFailureReason(node.left)
+        if (!isPureExpression(node.right)) return pureFailureReason(node.right)
+    }
+    return tsc.SyntaxKind[node.kind] ?? 'unknown expression'
 }
 
-function jsTypeofReport(stats: Stats, cache: readonly CacheEntry[]): string {
-    const rows = [
-        ['typeof usages', stats.typeofUsages.toString()],
-        ['comparison atoms', stats.comparisonAtoms.toString()],
-        ['pure atoms', stats.pureAtoms.toString()],
-        ['not-proven-pure atoms', stats.notProvenPureAtoms.toString()],
-        ['logical expressions', stats.logicalExpressions.toString()],
-        ['pure logical merged', stats.pureLogicalMerged.toString()],
-        ['not-proven-pure logical split', stats.notProvenPureLogicalSplit.toString()],
-        ['mixed-operand logical split', stats.mixedOperandLogicalSplit.toString()],
-        ['partial logical skipped', stats.partialLogicalSkipped.toString()],
-        ['candidate expressions', stats.candidateExpressions.toString()],
-        ['individual candidates', stats.individualCandidates.toString()],
-        ['merged candidates', stats.mergedCandidates.toString()],
-        ['not shorter skipped', stats.notShorterSkipped.toString()],
-        ['replacements made', stats.replacementsMade.toString()],
-        ['cache hits', stats.cacheHits.toString()],
-        ['cache misses', stats.cacheMisses.toString()],
-    ]
-    const cacheRows = [...cache]
-        .sort((a, b) => a.mask - b.mask)
-        .map(entry => [
-            partitionLabel(entry.mask),
-            markdownCode(entry.expression),
-            entry.uses.toString(),
-            entry.originalBytes.toString(),
-            entry.replacementBytes.toString(),
-            entry.saved.toString(),
-        ])
-
-    return [
-        markdownTable(['field', 'value'], rows),
-        '',
-        'Expressions',
-        '',
-        markdownTable(['partition', 'expression', 'uses', 'original bytes', 'replacement bytes', 'saved'], cacheRows),
-    ].join('\n')
+function isAssignmentOperator(kind: tsc.SyntaxKind): boolean {
+    return kind >= tsc.SyntaxKind.FirstAssignment && kind <= tsc.SyntaxKind.LastAssignment
 }

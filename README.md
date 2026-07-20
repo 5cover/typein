@@ -89,8 +89,8 @@ type Registry = { [S in Domain]?: Registry, [K in GuardKey]?: Guard }
 
 Useful options:
 
-- `--report`: write coverage and interest-score reporting to stderr.
-- `--profile`: write timing and composition-search counters to stderr.
+- `--report [file]`: write structured YAML reporting to stderr, or to `file` when provided.
+- `--profile`: include timing and composition-search counters in reporting. Without `--report`, profile YAML is written to stderr.
 - `--test`: verify every generated expression against its promised mask for the input domain.
 - `-b, --builtin name`: add strings from a builtin domain. Can be repeated and can be combined with `--domain`.
 - `-d, --domain value`: add one string to the input domain. Can be repeated and can be combined with builtins.
@@ -106,7 +106,7 @@ Useful options:
 `typein minify` runs source minifiers as an ordered pipeline. Without `--in-place`, transformed source is written to stdout; with `--in-place`, the input file is rewritten. The first minifier is `js.typeof`, which parses JavaScript with TypeScript's JavaScript parser, replaces only eligible `typeof` expressions by source spans, and leaves unrelated source bytes unchanged.
 
 ```sh
-typein minify dist/jquery-4.0.0.module.js js.typeof --report > /tmp/jquery-typein.js
+typein minify dist/jquery-4.0.0.module.js js.typeof --report /tmp/jquery-typein.yml > /tmp/jquery-typein.js
 ```
 
 `js.typeof` only reasons about direct `typeof` comparisons against JavaScript typestrings. It may merge logical `&&`/`||` groups for pure-enough operands, but impure operands such as calls are simplified only one comparison at a time so their evaluation count is preserved.
@@ -124,8 +124,8 @@ Regex-backed token patterns are disabled by default. They can be enabled with `-
 The CSS query benchmark ladder can be run with:
 
 ```sh
-typein bench-css-query --test
-typein bench-css-query --report --profile --test
+typein bench-css-query --report --test
+typein bench-css-query --report /tmp/css-query.yml --profile --test
 ```
 
 The benchmark starts at the configured query limits. If a rung still emits the equality-OR fallback, it retries with doubled limits until the expression improves or one run takes more than ten seconds.
@@ -141,13 +141,7 @@ For large query domains, `--profile` distinguishes exact correctness from search
 - `--query-dnf-frontier count`
 - `--query-regex`: allow regex-backed query candidates. Disabled by default.
 
-`--report` includes two coverage tables. In the family table:
-
-- `candidates`: candidate expressions considered for that family, including candidates for empty/full masks.
-- `masks`: distinct non-empty, non-full masks produced by that family.
-- `new`: masks first discovered by that family in search order.
-- `improvements`: times a candidate from that family replaced the current best expression for a mask.
-- `winners`: final output masks whose direct winning expression came from that family.
+Reports are structured YAML DTOs rather than preformatted tables. Collections are emitted as `{ count, values }`, so reports stay glanceable while still exposing the underlying values. Query reports include family counters such as `candidates`, `masks`, `newMasks`, `improvements`, and `winners`; `js.typeof` reports include source spans for `typeof` usages, comparison atoms, purity decisions, replacement candidates, selected replacements, and expressions cached by partition.
 
 For v0,
 *S* = typestrings

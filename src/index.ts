@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Command, InvalidArgumentError, Option, type OptionValues } from '@commander-js/extra-typings'
+import { Command, InvalidArgumentError, Option } from '@commander-js/extra-typings'
 import * as emit from './emit.js'
 import {
     defaultQueryFeatures,
@@ -11,13 +11,12 @@ import {
     type QueryLimits,
 } from './solve.js'
 import { costComparators, printExpression, sourceLength } from './cost.js'
-import { coverageReport, interestReport, profileReport, queryProfileReport, queryReport } from './report.js'
+import { coverageReport, interestReport, profileReport, queryProfileReport, queryReport, reportYaml } from './report.js'
 import { verifyQuery, verifyResult } from './eval.js'
 import { builtinDomainNames, builtinDomains, type BuiltinDomainName } from './domains.js'
 import { performance } from 'node:perf_hooks'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { getMinifier, minifierNames, minifyReport } from './minify.js'
-import { markdownCode, markdownTable } from './markdown.js'
 
 const supportedLanguages = ['ts'] as const
 const supportedCosts = ['source'] as const
@@ -36,7 +35,7 @@ const program = new Command('typein')
     .addOption(
         new Option('--cost <name>', 'cost comparison function').choices(supportedCosts).default('source' as const),
     )
-    .option('--report', 'write search reporting to stderr')
+    .option('--report [file]', 'write YAML reporting to stderr or to a file')
     .option('--profile', 'write timing and search profile to stderr')
     .option('--test', 'verify generated expressions against their promised partition')
     .option('--type-name <name>', 'generated TypeScript union name', 'Domain')
@@ -161,9 +160,14 @@ function runAll(opts: CommonOptions & { guardKey: string }) {
     let verifyMs = 0
     let emitMs = 0
 
+    const report: Record<string, unknown> = {
+        command: 'all',
+        domain,
+    }
+
     if (opts.report) {
         const reportStart = performance.now()
-        console.error(`${coverageReport(domain, result)}\n\n${interestReport(domain, result)}`)
+        Object.assign(report, coverageReport(domain, result), interestReport(domain, result))
         reportMs = performance.now() - reportStart
     }
 
@@ -196,17 +200,20 @@ function runAll(opts: CommonOptions & { guardKey: string }) {
         }
     }
 
-    if (opts.profile) {
-        console.error(
-            `${profileReport(result, {
+    if (opts.profile || opts.report) {
+        Object.assign(
+            report,
+            profileReport(result, {
                 totalMs: performance.now() - totalStart,
                 solveMs,
                 reportMs,
                 verifyMs,
                 emitMs,
-            })}\n`,
+            }),
         )
     }
+
+    writeReport(reportTarget(opts), report)
 }
 
 function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOptionValues) {
@@ -229,9 +236,15 @@ function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOpti
     let verifyMs = 0
     let emitMs = 0
 
+    const report: Record<string, unknown> = {
+        command: 'for',
+        domain,
+        requestedTargets: targets,
+    }
+
     if (opts.report) {
         const reportStart = performance.now()
-        console.error(queryReport(domain, result))
+        Object.assign(report, queryReport(domain, result))
         reportMs = performance.now() - reportStart
     }
 
@@ -262,8 +275,9 @@ function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOpti
         }
     }
 
-    if (opts.profile) {
-        console.error(
+    if (opts.profile || opts.report) {
+        Object.assign(
+            report,
             queryProfileReport(result, {
                 totalMs: performance.now() - totalStart,
                 solveMs,
@@ -273,12 +287,14 @@ function runFor(targetValues: readonly string[], opts: CommonOptions & QueryOpti
             }),
         )
     }
+
+    writeReport(reportTarget(opts), report)
 }
 
 function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
     const domain = builtinDomains['css-properties']
     const baseLimits = queryLimitsFromOptions(opts)
-    const rows: string[][] = []
+    const benchmarks: unknown[] = []
 
     for (const benchmark of cssQueryBenchmarks) {
         let limits = baseLimits
@@ -299,9 +315,21 @@ function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
             const resultCost = sourceLength(result.expr)
             const improved = resultCost < fallbackCost
 
-            if (opts.report) console.error(`\n# ${benchmark.name}\n${queryReport(domain, result)}`)
-            if (opts.profile) {
-                console.error(
+            const benchmarkReport: Record<string, unknown> = {
+                name: benchmark.name,
+                targets: benchmark.targets,
+                limits,
+                ms: totalMs,
+                improved,
+                proof: result.profile.proof,
+                limitHit: result.profile.orStateLimitHit || result.profile.andStateLimitHit,
+                expression: printExpression(result.expr, 's'),
+            }
+
+            if (opts.report) Object.assign(benchmarkReport, queryReport(domain, result))
+            if (opts.profile || opts.report) {
+                Object.assign(
+                    benchmarkReport,
                     queryProfileReport(result, {
                         totalMs,
                         solveMs,
@@ -326,34 +354,20 @@ function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
                 }
             }
 
-            rows.push([
-                benchmark.name,
-                benchmark.targets.length.toString(),
-                limitsLabel(limits),
-                formatMs(totalMs),
-                improved ? 'yes' : 'no',
-                result.profile.proof,
-                result.profile.orStateLimitHit || result.profile.andStateLimitHit ? 'yes' : 'no',
-                markdownCode(printExpression(result.expr, 's')),
-            ])
+            benchmarks.push(benchmarkReport)
 
             if (improved || totalMs > 10_000) break
             limits = doubleQueryLimits(limits)
         }
     }
 
-    console.error(
-        [
-            '## CSS Query Benchmark',
-            markdownTable(['query', 'targets', 'limits', 'ms', 'improved', 'proof', 'limit hit', 'expression'], rows),
-            '',
-        ].join('\n'),
-    )
+    writeReport(reportTarget(opts), { command: 'bench-css-query', domain, benchmarks })
 }
 
 function runMinify(input: string, names: readonly string[], opts: MinifyOptions & QueryOptionValues) {
     let source = readFileSync(input, 'utf8')
-    const reports: string[] = []
+    const reports: unknown[] = []
+    const totalInputBytes = source.length
 
     names.forEach((name, index) => {
         const minifier = getMinifier(name)
@@ -368,7 +382,7 @@ function runMinify(input: string, names: readonly string[], opts: MinifyOptions 
             cost: opts.cost,
             queryLimits: queryLimitsFromOptions(opts),
             queryFeatures: queryFeaturesFromOptions(opts),
-            report: opts.report,
+            report: Boolean(opts.report),
         })
         const elapsed = performance.now() - start
         source = result.code
@@ -380,12 +394,10 @@ function runMinify(input: string, names: readonly string[], opts: MinifyOptions 
                     name,
                     inputLength,
                     result.code.length,
-                    [
-                        opts.profile ? markdownTable(['phase', 'ms'], [['minifier', formatMs(elapsed)]]) : '',
-                        result.report ?? '',
-                    ]
-                        .filter(Boolean)
-                        .join('\n\n'),
+                    {
+                        ...(opts.profile ? { profile: { phasesMs: { minifier: elapsed } } } : {}),
+                        ...(result.report === undefined ? {} : { report: result.report }),
+                    },
                 ),
             )
         }
@@ -394,7 +406,14 @@ function runMinify(input: string, names: readonly string[], opts: MinifyOptions 
     if (opts.inPlace) writeFileSync(input, source)
     else console.log(source)
 
-    if (reports.length > 0) console.error(reports.join('\n\n'))
+    writeReport(reportTarget(opts), {
+        command: 'minify',
+        input,
+        inputBytes: totalInputBytes,
+        outputBytes: source.length,
+        savedBytes: totalInputBytes - source.length,
+        minifiers: reports,
+    })
 }
 
 type CommonOptions = {
@@ -402,7 +421,7 @@ type CommonOptions = {
     domain?: string[]
     language: 'ts'
     cost: 'source'
-    report?: boolean
+    report?: true | string
     profile?: boolean
     test?: boolean
     defineType?: boolean
@@ -475,7 +494,7 @@ function unique<T>(values: readonly T[]): T[] {
 }
 
 type BenchOptions = {
-    report?: boolean
+    report?: true | string
     profile?: boolean
     test?: boolean
 }
@@ -549,18 +568,16 @@ function doubleQueryLimits(limits: QueryLimits): QueryLimits {
     }
 }
 
-function limitsLabel(limits: QueryLimits): string {
-    return [
-        limits.orStates,
-        limits.andStates,
-        limits.supersetPreFrontier,
-        limits.supersetFrontier,
-        limits.dnfFrontier,
-    ].join('/')
+function writeReport(target: true | string | undefined, report: unknown): void {
+    if (!target) return
+
+    const yaml = reportYaml(report)
+    if (target === true) console.error(yaml)
+    else writeFileSync(target, yaml)
 }
 
-function formatMs(value: number): string {
-    return value.toFixed(1)
+function reportTarget(opts: { report?: true | string; profile?: boolean }): true | string | undefined {
+    return opts.report ?? (opts.profile ? true : undefined)
 }
 
 program.parse()

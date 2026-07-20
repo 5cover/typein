@@ -1,11 +1,10 @@
 import { jsTypeofMinifier, type JsTypeofMinifierOptions } from './minify-js-typeof.js'
-import { markdownTable } from './markdown.js'
 
 export type MinifierOptions = JsTypeofMinifierOptions
 
 export type MinifierResult = {
     code: string
-    report?: string
+    report?: unknown
 }
 
 export type Minifier = {
@@ -30,22 +29,17 @@ export function minifyReport(
     name: string,
     inputLength: number,
     outputLength: number,
-    detail?: string,
-): string {
+    extra: Record<string, unknown> = {},
+) {
     const saved = inputLength - outputLength
     const percentage = inputLength === 0 ? 0 : (saved / inputLength) * 100
-    return [
-        `## ${index}. ${name}`,
-        '',
-        markdownTable(
-            ['field', 'value'],
-            [
-                ['input length', inputLength.toString()],
-                ['output length', outputLength.toString()],
-                ['saved bytes', saved.toString()],
-                ['saved percent', `${percentage.toFixed(2)}%`],
-            ],
-        ),
-        detail ? `\n${detail}` : '',
-    ].join('\n')
+    return {
+        index,
+        name,
+        inputBytes: inputLength,
+        outputBytes: outputLength,
+        savedBytes: saved,
+        savedPercent: percentage,
+        ...extra,
+    }
 }
