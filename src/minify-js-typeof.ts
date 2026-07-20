@@ -6,6 +6,8 @@ import * as compile from './compile.js'
 import * as emit from './emit.js'
 import { applySourceEdits, selectNonOverlappingEdits, type SourceEdit } from './source-edit.js'
 import type { Expr } from './ir.js'
+import type { Mask } from './types.js'
+import { computeMask, maskToNames } from './mask.js'
 
 const f = tsc.factory
 const typeofDomain = builtinDomains.typeof
@@ -28,7 +30,7 @@ type TypeofAnalysis = {
 }
 
 type Replacement = SourceEdit & {
-    partition: string
+    mask: Mask
     expression: string
     original: string
     pure: boolean
@@ -36,7 +38,7 @@ type Replacement = SourceEdit & {
 }
 
 type CacheEntry = {
-    partition: string
+    mask: Mask
     expression: string
     uses: number
     originalBytes: number
@@ -76,8 +78,8 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         cacheHits: 0,
         cacheMisses: 0,
     }
-    const cache = new Map<string, CacheEntry>()
-    const solved = new Map<string, Expr>()
+    const cache = new Map<Mask, CacheEntry>()
+    const solved = new Map<Mask, Expr>()
     const candidates: Replacement[] = []
 
     visit(sourceFile)
@@ -113,8 +115,8 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         const start = node.getStart(sourceFile)
         const end = node.getEnd()
         const original = source.slice(start, end)
-        const partition = partitionKey(analysis.target)
-        const expressionNode = expressionFor(analysis, partition)
+        const mask = maskFor(analysis.target)
+        const expressionNode = expressionFor(analysis, mask)
         const emittedExpression = printExpressionNode(expressionNode).replaceAll(rootPlaceholder, `(${analysis.root.getText(sourceFile)})`)
         const replacement = parenthesizeForContext(
             emittedExpression,
@@ -122,15 +124,15 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
             expressionNode,
         )
 
-        const entry = cache.get(partition) ?? {
-            partition,
-            expression: genericExpressionFor(analysis.target, partition),
+        const entry = cache.get(mask) ?? {
+            mask,
+            expression: genericExpressionFor(analysis.target, mask),
             uses: 0,
             originalBytes: 0,
             replacementBytes: 0,
             saved: 0,
         }
-        if (!cache.has(partition)) cache.set(partition, entry)
+        if (!cache.has(mask)) cache.set(mask, entry)
 
         entry.uses++
         entry.originalBytes += original.length
@@ -146,7 +148,7 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
             start,
             end,
             replacement,
-            partition,
+            mask,
             expression: replacement,
             original,
             pure: analysis.pure,
@@ -154,11 +156,11 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         }
     }
 
-    function expressionFor(analysis: TypeofAnalysis, partition: string): tsc.Expression {
+    function expressionFor(analysis: TypeofAnalysis, mask: Mask): tsc.Expression {
         if (analysis.target.size === 0) return f.createFalse()
         if (analysis.target.size === typeofDomain.length) return f.createTrue()
 
-        const expr = solveExpr(analysis.target, partition, true)
+        const expr = solveExpr(analysis.target, mask, true)
 
         return compile.expr2ts(expr, {
             root: f.createIdentifier(rootPlaceholder),
@@ -168,11 +170,11 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         })
     }
 
-    function genericExpressionFor(target: ReadonlySet<TypeofValue>, partition: string): string {
+    function genericExpressionFor(target: ReadonlySet<TypeofValue>, mask: Mask): string {
         if (target.size === 0) return 'false'
         if (target.size === typeofDomain.length) return 'true'
 
-        const expr = solved.get(partition) ?? solveExpr(target, partition, false)
+        const expr = solved.get(mask) ?? solveExpr(target, mask, false)
         return printExpressionNode(
             compile.expr2ts(expr, {
                 root: f.createIdentifier('t'),
@@ -183,8 +185,8 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         )
     }
 
-    function solveExpr(target: ReadonlySet<TypeofValue>, partition: string, countCacheAccess: boolean): Expr {
-        const cached = solved.get(partition)
+    function solveExpr(target: ReadonlySet<TypeofValue>, mask: Mask, countCacheAccess: boolean): Expr {
+        const cached = solved.get(mask)
         if (cached !== undefined) {
             if (countCacheAccess) stats.cacheHits++
             return cached
@@ -199,7 +201,7 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
             opts.queryLimits,
             opts.queryFeatures,
         )
-        solved.set(partition, result.expr)
+        solved.set(mask, result.expr)
         return result.expr
     }
 
@@ -345,8 +347,12 @@ function intersection(left: ReadonlySet<TypeofValue>, right: ReadonlySet<TypeofV
     return new Set([...left].filter(value => right.has(value)))
 }
 
-function partitionKey(values: ReadonlySet<TypeofValue>): string {
-    return typeofDomain.filter(value => values.has(value)).join(' | ') || '<empty>'
+function maskFor(values: ReadonlySet<TypeofValue>): Mask {
+    return computeMask(typeofDomain, value => values.has(value))
+}
+
+function partitionLabel(mask: Mask): string {
+    return maskToNames(typeofDomain, mask).join(' ') || '<empty>'
 }
 
 function printExpressionNode(node: tsc.Expression): string {
@@ -483,9 +489,9 @@ function jsTypeofReport(stats: Stats, cache: readonly CacheEntry[]): string {
         ['cache misses', stats.cacheMisses.toString()],
     ]
     const cacheRows = [...cache]
-        .sort((a, b) => a.partition.localeCompare(b.partition))
+        .sort((a, b) => a.mask - b.mask)
         .map(entry => [
-            entry.partition,
+            partitionLabel(entry.mask),
             code(entry.expression),
             entry.uses.toString(),
             entry.originalBytes.toString(),
