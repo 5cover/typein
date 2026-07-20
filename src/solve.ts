@@ -93,6 +93,11 @@ export type SolveProfile = {
 }
 
 export type QueryProfile = SolveProfile & {
+    dualMs: number
+    dualAttempted: boolean
+    dualImproved: boolean
+    dualSkippedReason?: 'trivial-target' | 'complement-not-smaller'
+    dualProof?: 'query-normal-forms' | 'bounded-query-normal-forms'
     targetFound: boolean
     primitiveCandidates: number
     primitiveDiscarded: number
@@ -727,6 +732,17 @@ export function solveQuery<const Domain extends string>(
     queryLimits: QueryLimits = defaultQueryLimits,
     queryFeatures: QueryFeatures = defaultQueryFeatures,
 ): QueryResult {
+    return solveQueryCore(domain, targetValues, exprCostCompare, queryLimits, queryFeatures, true)
+}
+
+function solveQueryCore<const Domain extends string>(
+    domain: readonly Domain[],
+    targetValues: readonly Domain[],
+    exprCostCompare: (a: Expr, b: Expr) => number,
+    queryLimits: QueryLimits,
+    queryFeatures: QueryFeatures,
+    includeDual: boolean,
+): QueryResult {
     const limits = normalizeQueryLimits(queryLimits)
     const features = { ...defaultQueryFeatures, ...queryFeatures }
     const fullMask = (1n << BigInt(domain.length)) - 1n
@@ -736,6 +752,9 @@ export function solveQuery<const Domain extends string>(
         primitiveMs: 0,
         compositionMs: 0,
         finalizeMs: 0,
+        dualMs: 0,
+        dualAttempted: false,
+        dualImproved: false,
         compositionAttempts: 0,
         compositionPruned: 0,
         compositionConsidered: 0,
@@ -806,6 +825,25 @@ export function solveQuery<const Domain extends string>(
         if (dnfResult !== undefined) improve(dnfResult.expr)
     }
     profile.compositionMs = performance.now() - compositionStart
+
+    if (includeDual) {
+        const complementValues = domain.filter(value => !targetValueSet.has(value))
+        if (targetMask === 0n || targetMask === fullMask) {
+            profile.dualSkippedReason = 'trivial-target'
+        } else if (complementValues.length >= targetValues.length) {
+            profile.dualSkippedReason = 'complement-not-smaller'
+        } else {
+            const dualStart = performance.now()
+            profile.dualAttempted = true
+            const dual = solveQueryCore(domain, complementValues, exprCostCompare, queryLimits, queryFeatures, false)
+            profile.dualProof = dual.profile.proof
+            if (dual.profile.proof === 'bounded-query-normal-forms') proof = 'bounded-query-normal-forms'
+            const dualExpr = invertQueryExpr(dual.expr)
+            if (improve(dualExpr)) profile.dualImproved = true
+            profile.dualMs = performance.now() - dualStart
+        }
+    }
+
     profile.proof = proof
 
     const finalizeStart = performance.now()
@@ -1748,6 +1786,11 @@ function oneOfExpr(values: readonly string[]): Expr {
             args: { values: [...values].sort() },
         },
     }
+}
+
+function invertQueryExpr(expr: Expr): Expr {
+    const copy = structuredClone(expr)
+    return 'feature' in copy ? invertLastPredicateInPlace(copy) : notExpr(copy)
 }
 
 function tokenAnyExpr(token: string, separator: string): Expr {
