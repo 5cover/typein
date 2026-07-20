@@ -28,6 +28,7 @@ type TypeofAnalysis = {
     rootText: string
     pure: boolean
     typeofCount: number
+    kind: 'atom' | 'merged-logical'
 }
 
 type CacheEntry = {
@@ -41,10 +42,17 @@ type CacheEntry = {
 
 type Stats = {
     typeofUsages: number
+    comparisonAtoms: number
+    pureAtoms: number
+    notProvenPureAtoms: number
+    logicalExpressions: number
+    pureLogicalMerged: number
+    notProvenPureLogicalSplit: number
+    mixedOperandLogicalSplit: number
+    partialLogicalSkipped: number
     candidateExpressions: number
-    pureCandidates: number
-    impureCandidates: number
-    unsafeSkipped: number
+    individualCandidates: number
+    mergedCandidates: number
     notShorterSkipped: number
     replacementsMade: number
     cacheHits: number
@@ -62,10 +70,17 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
     const sourceFile = tsc.createSourceFile('input.js', source, tsc.ScriptTarget.Latest, true, tsc.ScriptKind.JS)
     const stats: Stats = {
         typeofUsages: 0,
+        comparisonAtoms: 0,
+        pureAtoms: 0,
+        notProvenPureAtoms: 0,
+        logicalExpressions: 0,
+        pureLogicalMerged: 0,
+        notProvenPureLogicalSplit: 0,
+        mixedOperandLogicalSplit: 0,
+        partialLogicalSkipped: 0,
         candidateExpressions: 0,
-        pureCandidates: 0,
-        impureCandidates: 0,
-        unsafeSkipped: 0,
+        individualCandidates: 0,
+        mergedCandidates: 0,
         notShorterSkipped: 0,
         replacementsMade: 0,
         cacheHits: 0,
@@ -98,12 +113,12 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
     }
 
     function replacementFor(node: tsc.Expression): SourceEdit | undefined {
-        const analysis = analyzeExpression(node)
+        const analysis = analyzeExpression(node, true)
         if (analysis === undefined) return undefined
 
         stats.candidateExpressions++
-        if (analysis.pure) stats.pureCandidates++
-        else stats.impureCandidates++
+        if (analysis.kind === 'atom') stats.individualCandidates++
+        else stats.mergedCandidates++
 
         const start = node.getStart(sourceFile)
         const end = node.getEnd()
@@ -193,17 +208,29 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         return result.expr
     }
 
-    function analyzeExpression(node: tsc.Expression): TypeofAnalysis | undefined {
+    function analyzeExpression(node: tsc.Expression, countStats: boolean): TypeofAnalysis | undefined {
         node = skipParens(node)
 
         if (tsc.isBinaryExpression(node) && isLogicalOperator(node.operatorToken.kind)) {
-            const left = analyzeExpression(node.left)
-            const right = analyzeExpression(node.right)
+            const left = analyzeExpression(node.left, false)
+            const right = analyzeExpression(node.right, false)
+            if (left === undefined && right === undefined) return undefined
+
+            if (countStats) stats.logicalExpressions++
             if (left === undefined || right === undefined) {
-                if (left !== undefined || right !== undefined) stats.unsafeSkipped++
+                if (countStats && (left !== undefined || right !== undefined)) stats.partialLogicalSkipped++
                 return undefined
             }
-            if (!left.pure || !right.pure || left.rootText !== right.rootText) return undefined
+            if (left.rootText !== right.rootText) {
+                if (countStats) stats.mixedOperandLogicalSplit++
+                return undefined
+            }
+            if (!left.pure || !right.pure) {
+                if (countStats) stats.notProvenPureLogicalSplit++
+                return undefined
+            }
+
+            if (countStats) stats.pureLogicalMerged++
 
             return {
                 target:
@@ -214,18 +241,26 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
                 rootText: left.rootText,
                 pure: true,
                 typeofCount: left.typeofCount + right.typeofCount,
+                kind: 'merged-logical',
             }
         }
 
         const comparison = typeofComparison(node)
         if (comparison === undefined) return undefined
+        const pure = isPureExpression(skipParens(comparison.root.expression))
+        if (countStats) {
+            stats.comparisonAtoms++
+            if (pure) stats.pureAtoms++
+            else stats.notProvenPureAtoms++
+        }
 
         return {
             target: comparisonTarget(comparison.value, comparison.operator),
             root: comparison.root,
             rootText: comparison.root.expression.getText(sourceFile),
-            pure: isPureExpression(skipParens(comparison.root.expression)),
+            pure,
             typeofCount: 1,
+            kind: 'atom',
         }
     }
 
@@ -467,10 +502,17 @@ function isAssignmentOperator(kind: tsc.SyntaxKind): boolean {
 function jsTypeofReport(stats: Stats, cache: readonly CacheEntry[]): string {
     const rows = [
         ['typeof usages', stats.typeofUsages.toString()],
+        ['comparison atoms', stats.comparisonAtoms.toString()],
+        ['pure atoms', stats.pureAtoms.toString()],
+        ['not-proven-pure atoms', stats.notProvenPureAtoms.toString()],
+        ['logical expressions', stats.logicalExpressions.toString()],
+        ['pure logical merged', stats.pureLogicalMerged.toString()],
+        ['not-proven-pure logical split', stats.notProvenPureLogicalSplit.toString()],
+        ['mixed-operand logical split', stats.mixedOperandLogicalSplit.toString()],
+        ['partial logical skipped', stats.partialLogicalSkipped.toString()],
         ['candidate expressions', stats.candidateExpressions.toString()],
-        ['pure candidates', stats.pureCandidates.toString()],
-        ['impure candidates', stats.impureCandidates.toString()],
-        ['unsafe skipped', stats.unsafeSkipped.toString()],
+        ['individual candidates', stats.individualCandidates.toString()],
+        ['merged candidates', stats.mergedCandidates.toString()],
         ['not shorter skipped', stats.notShorterSkipped.toString()],
         ['replacements made', stats.replacementsMade.toString()],
         ['cache hits', stats.cacheHits.toString()],
