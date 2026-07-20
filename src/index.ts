@@ -17,6 +17,7 @@ import { builtinDomainNames, builtinDomains, type BuiltinDomainName } from './do
 import { performance } from 'node:perf_hooks'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { getMinifier, minifierNames, minifyReport } from './minify.js'
+import { markdownCode, markdownTable } from './markdown.js'
 
 const supportedLanguages = ['ts'] as const
 const supportedCosts = ['source'] as const
@@ -333,7 +334,7 @@ function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
                 improved ? 'yes' : 'no',
                 result.profile.proof,
                 result.profile.orStateLimitHit || result.profile.andStateLimitHit ? 'yes' : 'no',
-                code(printExpression(result.expr, 's')),
+                markdownCode(printExpression(result.expr, 's')),
             ])
 
             if (improved || totalMs > 10_000) break
@@ -380,7 +381,7 @@ function runMinify(input: string, names: readonly string[], opts: MinifyOptions 
                     inputLength,
                     result.code.length,
                     [
-                        opts.profile ? `| phase | ms |\n| --- | --- |\n| minifier | ${formatMs(elapsed)} |` : '',
+                        opts.profile ? markdownTable(['phase', 'ms'], [['minifier', formatMs(elapsed)]]) : '',
                         result.report ?? '',
                     ]
                         .filter(Boolean)
@@ -560,22 +561,6 @@ function limitsLabel(limits: QueryLimits): string {
 
 function formatMs(value: number): string {
     return value.toFixed(1)
-}
-
-function markdownTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
-    return [
-        `| ${headers.join(' | ')} |`,
-        `| ${headers.map(() => '---').join(' | ')} |`,
-        ...rows.map(row => `| ${row.map(escapeMarkdownCell).join(' | ')} |`),
-    ].join('\n')
-}
-
-function escapeMarkdownCell(value: string): string {
-    return value.replaceAll('|', '\\|').replaceAll('\n', '<br>')
-}
-
-function code(value: string): string {
-    return `\`${value.replaceAll('`', '\\`')}\``
 }
 
 program.parse()

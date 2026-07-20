@@ -8,6 +8,7 @@ import { applySourceEdits, selectNonOverlappingEdits, type SourceEdit } from './
 import type { Expr } from './ir.js'
 import type { Mask } from './types.js'
 import { computeMask, maskToNames } from './mask.js'
+import { markdownCode, markdownTable } from './markdown.js'
 
 const f = tsc.factory
 const typeofDomain = builtinDomains.typeof
@@ -25,14 +26,6 @@ type TypeofAnalysis = {
     target: Set<TypeofValue>
     root: tsc.TypeOfExpression
     rootText: string
-    pure: boolean
-    typeofCount: number
-}
-
-type Replacement = SourceEdit & {
-    mask: Mask
-    expression: string
-    original: string
     pure: boolean
     typeofCount: number
 }
@@ -80,7 +73,7 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
     }
     const cache = new Map<Mask, CacheEntry>()
     const solved = new Map<Mask, Expr>()
-    const candidates: Replacement[] = []
+    const candidates: SourceEdit[] = []
 
     visit(sourceFile)
 
@@ -104,7 +97,7 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         tsc.forEachChild(node, visit)
     }
 
-    function replacementFor(node: tsc.Expression): Replacement | undefined {
+    function replacementFor(node: tsc.Expression): SourceEdit | undefined {
         const analysis = analyzeExpression(node)
         if (analysis === undefined) return undefined
 
@@ -148,11 +141,6 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
             start,
             end,
             replacement,
-            mask,
-            expression: replacement,
-            original,
-            pure: analysis.pure,
-            typeofCount: analysis.typeofCount,
         }
     }
 
@@ -492,7 +480,7 @@ function jsTypeofReport(stats: Stats, cache: readonly CacheEntry[]): string {
         .sort((a, b) => a.mask - b.mask)
         .map(entry => [
             partitionLabel(entry.mask),
-            code(entry.expression),
+            markdownCode(entry.expression),
             entry.uses.toString(),
             entry.originalBytes.toString(),
             entry.replacementBytes.toString(),
@@ -500,28 +488,10 @@ function jsTypeofReport(stats: Stats, cache: readonly CacheEntry[]): string {
         ])
 
     return [
-        '### js.typeof',
-        '',
         markdownTable(['field', 'value'], rows),
         '',
         'Expressions',
         '',
         markdownTable(['partition', 'expression', 'uses', 'original bytes', 'replacement bytes', 'saved'], cacheRows),
     ].join('\n')
-}
-
-function markdownTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
-    return [
-        `| ${headers.join(' | ')} |`,
-        `| ${headers.map(() => '---').join(' | ')} |`,
-        ...rows.map(row => `| ${row.map(escapeMarkdownCell).join(' | ')} |`),
-    ].join('\n')
-}
-
-function code(value: string): string {
-    return `\`${value.replaceAll('`', '\\`')}\``
-}
-
-function escapeMarkdownCell(value: string): string {
-    return value.replaceAll('|', '\\|').replaceAll('\n', '<br>')
 }

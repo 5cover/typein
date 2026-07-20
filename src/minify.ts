@@ -1,4 +1,5 @@
 import { jsTypeofMinifier, type JsTypeofMinifierOptions } from './minify-js-typeof.js'
+import { markdownTable } from './markdown.js'
 
 export type MinifierOptions = JsTypeofMinifierOptions
 
@@ -47,20 +48,4 @@ export function minifyReport(
         ),
         detail ? `\n${detail}` : '',
     ].join('\n')
-}
-
-export function markdownTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
-    return [
-        `| ${headers.join(' | ')} |`,
-        `| ${headers.map(() => '---').join(' | ')} |`,
-        ...rows.map(row => `| ${row.map(escapeMarkdownCell).join(' | ')} |`),
-    ].join('\n')
-}
-
-export function code(value: string): string {
-    return `\`${value.replaceAll('`', '\\`')}\``
-}
-
-function escapeMarkdownCell(value: string): string {
-    return value.replaceAll('|', '\\|').replaceAll('\n', '<br>')
 }

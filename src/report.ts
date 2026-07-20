@@ -2,6 +2,7 @@ import { maskToNames } from './mask.js'
 import type { FamilyKind, QueryResult, SolveResult } from './solve.js'
 import type { Mask } from './types.js'
 import { costCodeValue, printExpression } from './cost.js'
+import { markdownCode, markdownTable } from './markdown.js'
 
 export type CliProfile = {
     totalMs: number
@@ -119,7 +120,7 @@ export function queryReport(domain: readonly string[], result: QueryResult): str
                 ['target found', result.profile.targetFound ? 'yes' : 'no'],
                 ['allow regex', result.profile.allowRegex ? 'yes' : 'no'],
                 ['proof', result.profile.proof],
-                ['expression', code(printExpression(result.expr, 's'))],
+                ['expression', markdownCode(printExpression(result.expr, 's'))],
             ],
         ),
         queryFamilyTable(result),
@@ -247,21 +248,9 @@ function formatExpressionTable(
             formatNumber(row.cost),
             formatNumber(row.entropy),
             row.names.join(' '),
-            code(row.code),
+            markdownCode(row.code),
         ]),
     )
-}
-
-function markdownTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
-    return ['', markdownRow(headers), markdownRow(headers.map(() => '---')), ...rows.map(markdownRow), ''].join('\n')
-}
-
-function markdownRow(cells: readonly string[]): string {
-    return `| ${cells.join(' | ')} |`
-}
-
-function code(value: string): string {
-    return `\`${value.replaceAll('`', '\\`')}\``
 }
 
 function formatNumber(value: number): string {
