@@ -1,7 +1,7 @@
 import tsc, { EmitHint } from 'typescript'
 import { builtinDomains } from './domains.js'
 import { solveQuery, type QueryFeatures, type QueryLimits } from './solve.js'
-import { costComparators } from './cost.js'
+import { compactJsCostCode, printCompactJsExpression, type costComparators } from './cost.js'
 import * as compile from './compile.js'
 import * as emit from './emit.js'
 import { applySourceEdits, selectNonOverlappingEdits, type SourceEdit } from './source-edit.js'
@@ -9,6 +9,7 @@ import type { Expr } from './ir.js'
 import type { Mask } from './types.js'
 import { computeMask, maskToNames } from './mask.js'
 import { counted } from './report.js'
+import { compactJsExpression } from './js-minify.js'
 
 const f = tsc.factory
 const typeofDomain = builtinDomains.typeof
@@ -171,7 +172,10 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         const original = source.slice(start, end)
         const mask = maskFor(analysis.target)
         const expressionNode = expressionFor(analysis, mask)
-        const emittedExpression = printExpressionNode(expressionNode).replaceAll(rootPlaceholder, `(${analysis.root.getText(sourceFile)})`)
+        const emittedExpression = compactJsExpression(printExpressionNode(expressionNode)).replaceAll(
+            rootPlaceholder,
+            `(${analysis.root.getText(sourceFile)})`,
+        )
         const replacement = parenthesizeForContext(
             emittedExpression,
             node,
@@ -233,14 +237,7 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         if (target.size === typeofDomain.length) return 'true'
 
         const expr = solved.get(mask) ?? solveExpr(target, mask, false)
-        return printExpressionNode(
-            compile.expr2ts(expr, {
-                root: f.createIdentifier('t'),
-                language: 'js',
-                equality: 'loose',
-                createNonNullExpressions: false,
-            }),
-        )
+        return printCompactJsExpression(expr, 't')
     }
 
     function solveExpr(target: ReadonlySet<TypeofValue>, mask: Mask, countCacheAccess: boolean): Expr {
@@ -255,7 +252,7 @@ function minifyJsTypeof(source: string, opts: JsTypeofMinifierOptions) {
         const result = solveQuery(
             typeofDomain,
             targets,
-            costComparators[opts.cost],
+            compactJsCostCode,
             opts.queryLimits,
             opts.queryFeatures,
         )

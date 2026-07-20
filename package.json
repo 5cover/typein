@@ -23,6 +23,7 @@
   "dependencies": {
     "@prettier/html-tags": "^2.2.0",
     "known-css-properties": "^0.37.0",
+    "terser": "^5.49.0",
     "yaml": "^2.9.0"
   }
 }
