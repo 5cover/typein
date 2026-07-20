@@ -53,6 +53,7 @@ These string values will be refered to as "typestrings" from now on.
 ```sh
 typein for <TARGET_VALUE...> [common options]
 typein all [common options] [--guard-key <name>]
+typein minify <input> <MINIFIER...> [common options] [--in-place]
 ```
 
 When no domain source is provided, `typein` uses the JavaScript `typeof` strings. Generated TypeScript is written to stdout.
@@ -102,12 +103,20 @@ Useful options:
 
 `typein all` uses numeric bit operations for exhaustive enumeration, so domains must contain at most 30 strings. `typein for` uses a large-domain-safe query solver and does not have that numeric mask limit.
 
+`typein minify` runs source minifiers as an ordered pipeline. Without `--in-place`, transformed source is written to stdout; with `--in-place`, the input file is rewritten. The first minifier is `js.typeof`, which parses JavaScript with TypeScript's JavaScript parser, replaces only eligible `typeof` expressions by source spans, and leaves unrelated source bytes unchanged.
+
+```sh
+typein minify dist/jquery-4.0.0.module.js js.typeof --report > /tmp/jquery-typein.js
+```
+
+`js.typeof` only reasons about direct `typeof` comparisons against JavaScript typestrings. It may merge logical `&&`/`||` groups for pure-enough operands, but impure operands such as calls are simplified only one comparison at a time so their evaluation count is preserved.
+
 Builtin domains are intended both as examples and stress inputs. Use `typein for` for larger domains; `typein all` is intentionally exhaustive and can still be expensive. The full `css-properties` builtin contains the known CSS properties list; sliced variants such as `css-properties-50`, `css-properties-100`, `css-properties-250`, `css-properties-500`, and `css-properties-1000` are available for profiling.
 
 CSS-like hyphenated domains get extra native query primitives. Typein derives delimiter presence, token count, first/last/middle/any-token masks, offset `startsWith`, and `indexOf`/`lastIndexOf` relation masks from the requested target values. For arbitrary or scattered subsets, query mode may use a native finite-set check:
 
 ```ts
-(["a", "b"] as readonly string[]).includes(s)
+["a", "b"].includes(s as string)
 ```
 
 Regex-backed token patterns are disabled by default. They can be enabled with `--query-regex`, but regex is treated as a separate embedded language with a much higher analysis ceiling than native string predicates.

@@ -1,34 +1,64 @@
 import tsc from 'typescript'
 import type { Expr, Feature } from './ir.js'
 const f = tsc.factory
-export function expr2ts(expr: Expr, variable = 'x'): tsc.Expression {
-    if ('type' in expr) return exprToExpression(expr, variable)
-    return featureToExpression(f.createIdentifier(variable), expr.feature)
+
+export type ExprEmitOptions = {
+    variable?: string
+    root?: tsc.Expression
+    language?: 'ts' | 'js'
+    equality?: 'strict' | 'loose'
+    createNonNullExpressions?: boolean
 }
 
-function exprToExpression(expr: Exclude<Expr, { feature: Feature<'string'> }>, variable: string): tsc.Expression {
+export function expr2ts(expr: Expr, variableOrOptions: string | ExprEmitOptions = 'x'): tsc.Expression {
+    const opts = typeof variableOrOptions === 'string' ? { variable: variableOrOptions } : variableOrOptions
+    const context: Required<Omit<ExprEmitOptions, 'root'>> & { root: tsc.Expression } = {
+        variable: opts.variable ?? 'x',
+        root: opts.root ?? f.createIdentifier(opts.variable ?? 'x'),
+        language: opts.language ?? 'ts',
+        equality: opts.equality ?? 'strict',
+        createNonNullExpressions: opts.createNonNullExpressions ?? opts.language === 'ts',
+    }
+
+    if ('type' in expr) return exprToExpression(expr, context)
+    return featureToExpression(context.root, expr.feature, context)
+}
+
+function exprToExpression(
+    expr: Exclude<Expr, { feature: Feature<'string'> }>,
+    context: Required<Omit<ExprEmitOptions, 'root'>> & { root: tsc.Expression },
+): tsc.Expression {
     switch (expr.type) {
         case 'not':
-            return f.createLogicalNot(expr2ts(expr.expr, variable))
+            return f.createLogicalNot(expr2ts(expr.expr, context))
         case 'and':
-            return f.createLogicalAnd(expr2ts(expr.left, variable), expr2ts(expr.right, variable))
+            return f.createLogicalAnd(expr2ts(expr.left, context), expr2ts(expr.right, context))
         case 'or':
-            return f.createLogicalOr(expr2ts(expr.left, variable), expr2ts(expr.right, variable))
+            return f.createLogicalOr(expr2ts(expr.left, context), expr2ts(expr.right, context))
         case 'xor':
-            return f.createStrictInequality(expr2ts(expr.left, variable), expr2ts(expr.right, variable))
+            return f.createStrictInequality(expr2ts(expr.left, context), expr2ts(expr.right, context))
     }
 }
 
-function featureToExpression(parent: tsc.Expression, feat: Feature): tsc.Expression {
+function featureToExpression(
+    parent: tsc.Expression,
+    feat: Feature,
+    context: Required<Omit<ExprEmitOptions, 'root'>> & { root: tsc.Expression },
+): tsc.Expression {
     if (feat.type === 'at' && feat.child !== undefined && isRelationalFeature(feat.child)) {
-        return featureToExpression(f.createNonNullExpression(atExpression(parent, feat.args['-n'])), feat.child)
+        const at = atExpression(parent, feat.args['-n'])
+        return featureToExpression(context.createNonNullExpressions ? f.createNonNullExpression(at) : at, feat.child, context)
     }
 
-    parent = featureLevelToExpression(parent, feat)
-    return feat.child ? featureToExpression(parent, feat.child) : parent
+    parent = featureLevelToExpression(parent, feat, context)
+    return feat.child ? featureToExpression(parent, feat.child, context) : parent
 }
 
-function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Expression {
+function featureLevelToExpression(
+    parent: tsc.Expression,
+    feat: Feature,
+    context: Required<Omit<ExprEmitOptions, 'root'>> & { root: tsc.Expression },
+): tsc.Expression {
     switch (feat.type) {
         case 'self':
             return parent
@@ -40,10 +70,9 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
                 ),
                 undefined,
                 [
-                    f.createAsExpression(
-                        parent,
-                        f.createKeywordTypeNode(tsc.SyntaxKind.StringKeyword),
-                    ),
+                    context.language === 'ts'
+                        ? f.createAsExpression(parent, f.createKeywordTypeNode(tsc.SyntaxKind.StringKeyword))
+                        : parent,
                 ],
             )
         case 'length':
@@ -95,31 +124,35 @@ function featureLevelToExpression(parent: tsc.Expression, feat: Feature): tsc.Ex
                 [parent],
             )
         case '<':
-            return f.createLessThan(parent, featureToExpression(parent, feat.args))
+            return f.createLessThan(parent, featureToExpression(parent, feat.args, context))
         case '<=':
-            return f.createLessThanEquals(parent, featureToExpression(parent, feat.args))
+            return f.createLessThanEquals(parent, featureToExpression(parent, feat.args, context))
         case '<>':
-            return f.createStrictInequality(parent, featureToExpression(parent, feat.args))
+            return context.equality === 'loose'
+                ? f.createInequality(parent, featureToExpression(parent, feat.args, context))
+                : f.createStrictInequality(parent, featureToExpression(parent, feat.args, context))
         case '=':
-            return f.createStrictEquality(parent, featureToExpression(parent, feat.args))
+            return context.equality === 'loose'
+                ? f.createEquality(parent, featureToExpression(parent, feat.args, context))
+                : f.createStrictEquality(parent, featureToExpression(parent, feat.args, context))
         case '>':
-            return f.createGreaterThan(parent, featureToExpression(parent, feat.args))
+            return f.createGreaterThan(parent, featureToExpression(parent, feat.args, context))
         case '>=':
-            return f.createGreaterThanEquals(parent, featureToExpression(parent, feat.args))
+            return f.createGreaterThanEquals(parent, featureToExpression(parent, feat.args, context))
         case 'and':
-            return f.createLogicalAnd(parent, featureToExpression(parent, feat.args))
+            return f.createLogicalAnd(parent, featureToExpression(parent, feat.args, context))
         case 'if':
             return f.createConditionalExpression(
                 parent,
                 undefined,
-                featureToExpression(parent, feat.args.then),
+                featureToExpression(parent, feat.args.then, context),
                 undefined,
-                featureToExpression(parent, feat.args.else),
+                featureToExpression(parent, feat.args.else, context),
             )
         case 'not':
             return f.createLogicalNot(parent)
         case 'or':
-            return f.createLogicalOr(parent, featureToExpression(parent, feat.args))
+            return f.createLogicalOr(parent, featureToExpression(parent, feat.args, context))
         case 'lit':
             return literalToExpression(feat.args)
     }

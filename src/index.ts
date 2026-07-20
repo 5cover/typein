@@ -15,6 +15,8 @@ import { coverageReport, interestReport, profileReport, queryProfileReport, quer
 import { verifyQuery, verifyResult } from './eval.js'
 import { builtinDomainNames, builtinDomains, type BuiltinDomainName } from './domains.js'
 import { performance } from 'node:perf_hooks'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { getMinifier, minifierNames, minifyReport } from './minify.js'
 
 const supportedLanguages = ['ts'] as const
 const supportedCosts = ['source'] as const
@@ -65,7 +67,7 @@ program
 queryCommand('for')
     .description('emit a guard for one target partition')
     .argument('<targetValues...>')
-    .action((targetValues, _, c) => runFor(targetValues, c.optsWithGlobals()))
+    .action((targetValues, _, c) => runFor(targetValues, c.optsWithGlobals() as CommonOptions & QueryOptionValues))
 
 queryCommand('bench-css-query')
     .description('run the CSS query benchmark ladder')
@@ -81,13 +83,25 @@ queryCommand('test')
                     (s.startsWith('margin-') || s.startsWith('padding-') || s.startsWith('inset-')) &&
                     (s.endsWith('-start') || s.endsWith('-end')),
             ),
-            { ...c.optsWithGlobals(), domain },
+            { ...(c.optsWithGlobals() as CommonOptions & QueryOptionValues), domain },
         )
     })
 
+addQueryOptions(program.command('minify'))
+    .description('run source minifiers')
+    .argument('<input>')
+    .argument('<minifiers...>')
+    .option('-i, --in-place', 'rewrite the input file in place')
+    .action((input, minifiers, opts, c) =>
+        runMinify(input, minifiers, c.optsWithGlobals() as MinifyOptions & QueryOptionValues),
+    )
+
 function queryCommand(name: string) {
-    return program
-        .command(name)
+    return addQueryOptions(program.command(name))
+}
+
+function addQueryOptions(command: Command) {
+    return command
         .option(
             '--query-or-states <count>',
             'maximum OR-cover states to visit',
@@ -336,6 +350,52 @@ function runBenchCssQuery(opts: BenchOptions & QueryOptionValues) {
     )
 }
 
+function runMinify(input: string, names: readonly string[], opts: MinifyOptions & QueryOptionValues) {
+    let source = readFileSync(input, 'utf8')
+    const reports: string[] = []
+
+    names.forEach((name, index) => {
+        const minifier = getMinifier(name)
+        if (minifier === undefined) {
+            program.error(`unknown minifier "${name}"; supported minifiers: ${minifierNames.join(', ')}`)
+            return
+        }
+
+        const inputLength = source.length
+        const start = performance.now()
+        const result = minifier.run(source, {
+            cost: opts.cost,
+            queryLimits: queryLimitsFromOptions(opts),
+            queryFeatures: queryFeaturesFromOptions(opts),
+            report: opts.report,
+        })
+        const elapsed = performance.now() - start
+        source = result.code
+
+        if (opts.report) {
+            reports.push(
+                minifyReport(
+                    index + 1,
+                    name,
+                    inputLength,
+                    result.code.length,
+                    [
+                        opts.profile ? `| phase | ms |\n| --- | --- |\n| minifier | ${formatMs(elapsed)} |` : '',
+                        result.report ?? '',
+                    ]
+                        .filter(Boolean)
+                        .join('\n\n'),
+                ),
+            )
+        }
+    })
+
+    if (opts.inPlace) writeFileSync(input, source)
+    else console.log(source)
+
+    if (reports.length > 0) console.error(reports.join('\n\n'))
+}
+
 type CommonOptions = {
     builtin?: BuiltinDomainName[]
     domain?: string[]
@@ -347,6 +407,10 @@ type CommonOptions = {
     defineType?: boolean
     typeName: string
     parameterName: string
+}
+
+type MinifyOptions = CommonOptions & {
+    inPlace?: boolean
 }
 
 type QueryOptionValues = {
