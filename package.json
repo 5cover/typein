@@ -13,7 +13,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@10.33.2",
+  "packageManager": "pnpm@12.16.1",
   "type": "module",
   "devDependencies": {
     "@commander-js/extra-typings": "^15.0.0",
